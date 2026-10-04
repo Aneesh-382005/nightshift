@@ -110,6 +110,21 @@ export const RunbookTrust = __t.object("RunbookTrust", {
 });
 export type RunbookTrust = __Infer<typeof RunbookTrust>;
 
+export const Skill = __t.object("Skill", {
+  slug: __t.string(),
+  title: __t.string(),
+  category: __t.string(),
+  tags: __t.string(),
+  summary: __t.string(),
+  body: __t.string(),
+  runbook: __t.string(),
+  risk: __t.string(),
+  source: __t.string(),
+  uses: __t.u32(),
+  updatedAtUs: __t.u64(),
+});
+export type Skill = __Infer<typeof Skill>;
+
 export const Trust = __t.object("Trust", {
   id: __t.u64(),
   requester: __t.string(),

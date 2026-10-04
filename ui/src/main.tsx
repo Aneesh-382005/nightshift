@@ -28,7 +28,7 @@ const connectionBuilder = DbConnection.builder()
     try { localStorage.setItem(TOKEN_KEY, token) } catch { /* private mode */ }
     conn.subscriptionBuilder().subscribe([
       tables.device, tables.accessGrant, tables.event, tables.change,
-      tables.incident, tables.runbookTrust, tables.runResult, tables.userRequest,
+      tables.incident, tables.runbookTrust, tables.runResult, tables.userRequest, tables.skill,
     ])
   })
   .onConnectError((_ctx, err) => console.error('connect error', err))

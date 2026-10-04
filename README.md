@@ -18,6 +18,9 @@ It is 3 a.m. A server goes down. Nobody wakes up, and it fixes itself. When a fi
 
 ## How it fits together
 
+![Nightshift architecture](docs/img/architecture.png)
+
+
 ```mermaid
 flowchart LR
   A[Alert or request] --> H[Agent harness<br/>Gemini CLI, Claude Code, Codex]

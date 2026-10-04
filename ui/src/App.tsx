@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useReducer, useSpacetimeDB, useTable } from 'spacetimedb/react'
-import { reducers, tables } from './module_bindings'
+import { useSpacetimeDB, useTable } from 'spacetimedb/react'
+import { tables } from './module_bindings'
 import {
   HUMAN_TICKET_USD, PROMOTE_AT, ageSeconds, fmtAge, fmtCountdown, fmtTime, nowUs, parseCost, type Cost,
 } from './lib'
-import { buildHero, buildStory, effectiveStatus, type Hero, type Hold, type Step } from './story'
+import { buildHero, buildStory, buildTrace, decisionsByGrant, effectiveStatus, healthSignals, stateAt, type Hero, type Hold, type Step, type TraceLine } from './story'
+import { SkillsLibrary, skillsUsedFor } from './skills'
+import { AgentReasoning, AgentTerminal } from './terminal'
+import { LivePanel, Thread, diagnosisFor } from './thread'
 import { FLOWER_LABEL, Flower, Garland, Hills, Plant, SkyBody, type FlowerState } from './garden'
 
 type Theme = 'dark' | 'light'
@@ -38,7 +41,7 @@ export default function App({ uri }: { uri: string }) {
   const now = useNow()
   const [showOffline, setShowOffline] = useState(() => readPref<string>('ns_offline', '0') === '1')
   useEffect(() => writePref('ns_offline', showOffline ? '1' : '0'), [showOffline])
-  const [theme, setTheme] = useState<Theme>(() => readPref<Theme>('ns_theme', 'dark'))
+  const [theme, setTheme] = useState<Theme>(() => (new URLSearchParams(window.location.search).get('theme') === 'light' ? 'light' : readPref<Theme>('ns_theme', 'dark')))
   useEffect(() => { document.documentElement.dataset.theme = theme; writePref('ns_theme', theme) }, [theme])
 
   const [devices, devReady] = useTable(tables.device)
@@ -49,11 +52,14 @@ export default function App({ uri }: { uri: string }) {
   const [trusts] = useTable(tables.runbookTrust)
   const [results] = useTable(tables.runResult)
   const [requests] = useTable(tables.userRequest)
+  const [skills] = useTable(tables.skill)
 
   const evSorted = useMemo(() => [...events].sort(byIdDesc), [events])
   const grantSorted = useMemo(() => [...grants].sort(byIdDesc), [grants])
   const grantById = useMemo(() => new Map(grants.map(g => [g.id, g])), [grants])
-  const heroRaw = buildHero(devices, grants, incidents, events, now, requests)
+  const isStale = (d: { status: string; lastHeartbeatUs: bigint }) => d.status !== 'online' && ageSeconds(d.lastHeartbeatUs, now) > 600
+  const heroRaw = buildHero(devices.filter(d => !isStale(d)), grants, incidents, events, now, requests)
+  const signals = useMemo(() => healthSignals(evSorted), [evSorted])
 
   const incSorted = useMemo(() => [...incidents].sort(byIdDesc), [incidents])
   // Visual holds: a flower stays wilted >= 5 s, shows healing >= 3 s, then blooms with a Fixed banner >= 6 s.
@@ -78,6 +84,8 @@ export default function App({ uri }: { uri: string }) {
   }
   const fixedDev = devices.find(d => holds.get(d.id) === 'fixed' && incidents.some(i => i.device === d.id && i.status === 'healed'))
 
+  const decisions = useMemo(() => decisionsByGrant(events), [events])
+  const resultById = useMemo(() => new Map(results.map(r => [r.grantId, r])), [results])
   const stories = incSorted.slice(0, 4).map(inc => {
     // Events belong to this incident until the next incident on the same device.
     const next = incidents.filter(o => o.device === inc.device && o.id > inc.id).reduce((m, o) => (o.tsUs < m ? o.tsUs : m), MAX_US)
@@ -85,7 +93,7 @@ export default function App({ uri }: { uri: string }) {
     const hold = latest ? holds.get(inc.device) : undefined
     let status = effectiveStatus(inc, events, requests, next)
     if (status === 'healed' && (hold === 'wilted' || hold === 'healing')) status = 'open'
-    return { inc, steps: buildStory(inc, events, grantById, trusts, next, hold), status }
+    return { inc, steps: buildStory(inc, events, grantById, trusts, next, hold, decisions), status, trace: buildTrace(inc, grants, decisions, resultById, next), diagnosis: diagnosisFor(evSorted, inc.id), usedSkills: skillsUsedFor(inc.id, requests, evSorted) }
   })
 
   const trust = [...trusts].sort((a, b) => (a.updatedAtUs < b.updatedAtUs ? 1 : -1))[0]
@@ -96,8 +104,8 @@ export default function App({ uri }: { uri: string }) {
   const promotedNow = trust ? evSorted.some(e => e.kind === 'trust.promoted' && e.detail === trust.runbookId && ageSeconds(e.tsUs, now) < 20) : false
 
   // Devices offline for over 10 minutes are stale rows: hidden unless asked for.
-  const isStale = (d: { status: string; lastHeartbeatUs: bigint }) => d.status !== 'online' && ageSeconds(d.lastHeartbeatUs, now) > 600
   const visibleDevices = devices.filter(d => showOffline || !isStale(d))
+  const watchCount = devices.filter(d => d.status === 'online' && !isStale(d)).length
   const staleCount = devices.filter(isStale).length
   const pendingGrants = grants.filter(g => g.status === 'pending')
   const blockedEv = evSorted.find(e => isPolicyBlock(e) && ageSeconds(e.tsUs, now) < BLOCK_FLASH_S)
@@ -125,10 +133,13 @@ export default function App({ uri }: { uri: string }) {
   function flowerState(id: string, status: string): FlowerState {
     const bad = events.some(e => e.device === id && (
       (isPolicyBlock(e) && ageSeconds(e.tsUs, now) < BLOCK_FLASH_S)
-      || (ageSeconds(e.tsUs, now) < 12 && (e.kind === 'grant.revoked' || e.kind === 'health.failed'))))
+      || (ageSeconds(e.tsUs, now) < 12 && e.kind === 'grant.revoked')))
     if (bad) return 'blocked'
     if (grants.some(g => g.target === id && g.status === 'pending') || incidents.some(i => i.device === id && i.status === 'escalated')) return 'asking'
-    if (status !== 'online' || incidents.some(i => i.device === id && i.status === 'open')) return 'wilted'
+    // Same signal the terminal's patrol lines use: a failing health read or vitals event wilts the flower at once.
+    const sig = signals.get(id)
+    const failing = sig !== undefined && !sig.ok && ageSeconds(sig.tsUs, now) < 120
+    if (status !== 'online' || failing || incidents.some(i => i.device === id && i.status === 'open')) return 'wilted'
     return 'bloom'
   }
 
@@ -159,21 +170,27 @@ export default function App({ uri }: { uri: string }) {
       <section className="hero" aria-live="polite">
         <div className="hero-sky"><SkyBody sun={sun} /></div>
         <div className="hero-text">
-          <h1>Sleep. Nightshift&apos;s on.</h1>
+          <h1><span>Go to sleep.</span> <span>Nightshift is on.</span></h1>
           <div className={`state tone-${hero.tone}`}>
             <span className={`light ${hero.tone}`} role="img" aria-label={`Lantern: ${hero.tone}`} />
             <div>
               <div className="state-text">{hero.text}</div>
               {hero.sub && <div className="state-sub">{hero.sub}</div>}
+              {hero.tone === 'idle' && !fixedDev && <div className="watching"><span className="watch-dot" />Watching {watchCount} device{watchCount === 1 ? '' : 's'}</div>}
             </div>
           </div>
         </div>
         <Hills />
       </section>
 
-      <Garland />
-
       {pendingGrants.map(g => <ApprovalCard key={g.id.toString()} g={g} now={now} />)}
+
+      <div className="agent-grid">
+        <AgentReasoning events={evSorted} incidents={incidents} />
+        <AgentTerminal grants={grants} results={results} events={evSorted} />
+      </div>
+
+      <Garland />
 
       <MorningCard r={report} events={evSorted} />
 
@@ -201,6 +218,8 @@ export default function App({ uri }: { uri: string }) {
         </button>
       )}
 
+      <SkillsLibrary skills={skills} events={evSorted} now={now} />
+
       <Garland />
 
       <DemoControls />
@@ -210,8 +229,8 @@ export default function App({ uri }: { uri: string }) {
           <h2 className="sect">Tonight</h2>
           {stories.length === 0 ? (
             <div className="polaroid empty"><div className="polaroid-photo">All quiet. Nothing needs you.</div><div className="polaroid-cap">sleep well</div></div>
-          ) : stories.map(({ inc, steps, status }, i) => (
-            <StoryCard key={inc.id.toString()} tilt={i % 2 ? 0.7 : -0.7} status={status} device={inc.device} alert={inc.alert} steps={steps} />
+          ) : stories.map(({ inc, steps, status, trace, diagnosis, usedSkills }, i) => (
+            <StoryCard key={inc.id.toString()} tilt={i % 2 ? 0.7 : -0.7} status={status} device={inc.device} alert={inc.alert} steps={steps} trace={trace} diagnosis={diagnosis} usedSkills={usedSkills} anchor={`incident-${inc.id}`} />
           ))}
         </section>
 
@@ -244,7 +263,8 @@ export default function App({ uri }: { uri: string }) {
             )}
           </div>
 
-          <RequestBox requests={requests} now={now} />
+          <Thread requests={requests} events={evSorted} incidents={incidents} now={now} />
+          <LivePanel events={evSorted} />
         </aside>
       </div>
 
@@ -252,6 +272,7 @@ export default function App({ uri }: { uri: string }) {
 
       <details className="details">
         <summary>Details</summary>
+        <Replay events={events} grants={grants} incidents={incidents} devices={devices} />
         <div className="details-grid">
           <div>
             <h2>Grants</h2>
@@ -315,6 +336,53 @@ export default function App({ uri }: { uri: string }) {
           </div>
         </div>
       </details>
+    </div>
+  )
+}
+
+function Replay({ events, grants, incidents, devices }: {
+  events: readonly { id: bigint; tsUs: bigint; kind: string; device: string; grantId: bigint; detail: string }[]
+  grants: readonly { id: bigint; target: string; capability: string; reason: string; command: string; status: string; expiresAtUs: bigint; createdAtUs: bigint; decidedBy: string }[]
+  incidents: readonly { id: bigint; device: string; alert: string; runbookId: string; status: string; attempts: number; tsUs: bigint }[]
+  devices: readonly { id: string; status: string }[]
+}) {
+  const asc = useMemo(() => [...events].sort((a, b) => (a.id < b.id ? -1 : 1)), [events])
+  const [pos, setPos] = useState<number | null>(null) // null follows the live end
+  const [playing, setPlaying] = useState(false)
+  const n = asc.length
+  const at = Math.min(pos ?? n, n)
+  useEffect(() => {
+    if (!playing) return
+    const t = setInterval(() => setPos(p => {
+      const next = (p ?? 0) + 1
+      if (next >= n) { setPlaying(false); return null }
+      return next
+    }), 400)
+    return () => clearInterval(t)
+  }, [playing, n])
+  const ev = at > 0 ? asc[at - 1] : undefined
+  const t = ev ? ev.tsUs : 0n
+  const ids = [...new Set([...devices.map(d => d.id), ...asc.map(e => e.device).filter(d => d === 'web-1' || d === 'web-2' || d === 'pixel')])]
+    .filter(id => !id.startsWith('test') && !id.startsWith('demo')).sort()
+  return (
+    <div className="replay">
+      <h2>Replay the night</h2>
+      {n === 0 ? <p className="muted">No events yet.</p> : (
+        <>
+          <div className="replay-bar">
+            <button className="ghost" onClick={() => { if (playing) setPlaying(false); else { setPos(0); setPlaying(true) } }}>{playing ? 'Pause' : 'Play'}</button>
+            <input type="range" min={0} max={n} value={at} onChange={e => { setPlaying(false); setPos(Number(e.target.value)) }} aria-label="Replay position" />
+            <button className="ghost" onClick={() => { setPlaying(false); setPos(null) }} disabled={pos === null}>Live</button>
+          </div>
+          <div className="muted small mono">{ev ? `${at}/${n} · ${fmtTime(ev.tsUs)} · ${ev.kind}${ev.device ? ` [${ev.device}]` : ''} ${ev.detail.slice(0, 80)}` : `0/${n} · before the first event`}</div>
+          <div className="replay-flowers">
+            {ids.map(id => {
+              const st = ev ? stateAt(id, t, asc, grants, incidents) : 'bloom'
+              return <div key={id} className={`flower-card ${st}`}><Flower id={id} state={st} /><div className="flower-name">{id}</div><div className="flower-state">{FLOWER_LABEL[st]}</div></div>
+            })}
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -445,6 +513,7 @@ const FAULTS = [
   { label: 'Bad config', fault: 'config' },
   { label: 'Disk full', fault: 'disk' },
   { label: 'Phone Wi-Fi off', fault: 'wifi' },
+  { label: 'Mystery fault', fault: 'mystery', hint: 'Agent must diagnose' },
 ]
 
 function DemoControls() {
@@ -482,7 +551,7 @@ function DemoControls() {
       <div className="demo-grid">
         {FAULTS.map(f => (
           <button key={f.fault} className="demo-btn" disabled={busy !== '' || (f.fault === 'wifi') !== isPhone} onClick={() => void go(f)}>
-            {f.label}<span>{device}</span>
+            {f.label}<span>{'hint' in f ? f.hint : device}</span>
           </button>
         ))}
       </div>
@@ -492,13 +561,24 @@ function DemoControls() {
   )
 }
 
-function StoryCard({ device, alert, status, steps, tilt }: { device: string; alert: string; status: string; steps: Step[]; tilt: number }) {
+function StoryCard({ device, alert, status, steps, tilt, trace, diagnosis, usedSkills, anchor }: { device: string; alert: string; status: string; steps: Step[]; tilt: number; trace: TraceLine[]; diagnosis?: string; usedSkills: string[]; anchor: string }) {
+  const [showTrace, setShowTrace] = useState(false)
   return (
-    <article className="polaroid" style={{ transform: `rotate(${tilt}deg)` }}>
+    <article id={anchor} className="polaroid" style={{ transform: `rotate(${tilt}deg)` }}>
       <div className="polaroid-photo">
+        {usedSkills.length > 0 && <div className="skill-used">{usedSkills.map(t => <span key={t} className="chip skill-chip">Used skill: {t}</span>)}</div>}
+        {diagnosis && <div className="diagnosis"><span>Nightshift says</span>{diagnosis}</div>}
         <ol className="timeline">
           {steps.map(s => <StepRow key={s.key} s={s} />)}
         </ol>
+        <button className="link" onClick={() => setShowTrace(!showTrace)} aria-expanded={showTrace}>{showTrace ? 'hide agent trace' : 'Agent trace'}</button>
+        {showTrace && (
+          <ol className="agent-trace mono">
+            {trace.length === 0 ? <li>No tool calls recorded.</li> : trace.map((t, i) => (
+              <li key={t.id.toString()}>{i + 1}. run_command <b>{t.command}</b> <span className="muted">[{t.cls || t.capability}] {t.outcome}</span></li>
+            ))}
+          </ol>
+        )}
       </div>
       <footer className="polaroid-cap">
         <span>{device}: {alert}</span>
@@ -515,6 +595,7 @@ function StepRow({ s }: { s: Step }) {
       <span className="pin" />
       <div className="step-body">
         <div className="step-text">{s.text} <span className="muted small mono">{fmtTime(s.tsUs)}</span></div>
+        {s.why && <div className={`why ${s.why.tone}`}>{s.why.text}</div>}
         {s.command && (
           <>
             <button className="link" onClick={() => setOpen(!open)} aria-expanded={open}>{open ? 'hide command' : 'show command'}</button>
@@ -526,42 +607,3 @@ function StepRow({ s }: { s: Step }) {
   )
 }
 
-function RequestBox({ requests, now }: { requests: readonly { id: bigint; text: string; status: string; result: string; tsUs: bigint }[]; now: bigint }) {
-  const submit = useReducer(reducers.submitRequest)
-  const [text, setText] = useState('')
-  const [err, setErr] = useState('')
-  const [busy, setBusy] = useState(false)
-  const recent = [...requests].sort(byIdDesc).slice(0, 4)
-
-  async function send() {
-    const v = text.trim()
-    if (!v || busy) return
-    setBusy(true); setErr('')
-    try { await submit({ text: v }); setText('') }
-    catch (e) { setErr(e instanceof Error ? e.message : String(e)) }
-    finally { setBusy(false) }
-  }
-
-  return (
-    <section className="card">
-      <h2>Ask Nightshift</h2>
-      <form className="req" onSubmit={e => { e.preventDefault(); void send() }}>
-        <input value={text} onChange={e => setText(e.target.value)} placeholder="e.g. web-1 is slow, check it" maxLength={500} aria-label="Request" />
-        <button type="submit" disabled={busy || !text.trim()}>Send</button>
-      </form>
-      {err && <p className="err">{err}</p>}
-      <ul className="list">
-        {recent.map(r => (
-          <li key={r.id.toString()} className="row">
-            <div className="grow">
-              <div>{r.text}</div>
-              <div className="muted small">#{r.id.toString()} · {fmtAge(ageSeconds(r.tsUs, now))}</div>
-              {r.result && <div className="small result">{r.result}</div>}
-            </div>
-            <span className={`chip ${r.status}`}>{r.status}</span>
-          </li>
-        ))}
-      </ul>
-    </section>
-  )
-}

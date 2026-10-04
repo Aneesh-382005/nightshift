@@ -1,0 +1,10 @@
+# SANDBOX stand-in for a remote machine reached over SSH. Run demo/ssh/setup.sh first (creates the throwaway keypair).
+#   docker compose -f demo/ssh/docker-compose.yml up -d --build
+# Published on 127.0.0.1 only: 2222 (key-only ssh as nsuser) and 18083 (the status page).
+services:
+  ssh-box:
+    build: { context: .., dockerfile: ssh/Dockerfile }
+    container_name: ssh-box
+    restart: unless-stopped
+    environment: { NS_NAME: ssh-box }
+    ports: ["127.0.0.1:2222:22", "127.0.0.1:18083:8080"]

@@ -85,6 +85,10 @@ attempts = [m for m in logs if "reconnect attempt" in m]
 assert len(attempts) == 3, attempts                      # 2 failures + 1 success, one line each
 assert sum(1 for e in events if e.get("event") == "ready") == 1 and any("reconnecting" in e.get("message", "") for e in events)
 
+# per-LED updates (the trust meter) replace entries instead of growing the replay list
+for _ in range(5): b.led([0], 255, 190, 0, "solid"); b.led([6], 0, 40, 0, "solid")
+assert len(b._led_state) == 7 and b._led_state[0] == (255, 190, 0, "solid")
+
 # 2. normal operation resumes on the new handle
 d2.gui.show_text("x"); d2.shown.clear()
 b.text("DONE"); assert d2.shown == [("text", "DONE")]

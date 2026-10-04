@@ -1,0 +1,77 @@
+# Policy for ssh-box (kind ssh: a sandbox container reached over ssh as the limited user nsuser, ids ssh*).
+# Same runbooks as web-1 with absolute paths. No sudo, no network tools, no rm.
+deviceType: ssh-box
+
+forbidden:
+  - 'rm\s+(-\S+\s+)*-\S*[rR]'
+  - 'rm\s+(-\S+\s+)*\S*/var/log'
+  - 'rm\s+(-\S+\s+)*/(\s|$|\*)'
+  - '\brm\b'
+  - '\b(sudo|su|doas)\b'
+  - '\b(ssh|scp|sftp|rsync|curl|wget|nc|ncat|netcat|telnet|ftp)\b'
+  - '\bmkfs'
+  - '\bdd\s+if='
+  - '>\s*/dev/(sd|nvme|vd)'
+  - 'chmod\s+(-\S+\s+)*[0-7]*777\s+/'
+  - '\b(shutdown|poweroff|halt|reboot)\b'
+  - ':\(\)\s*\{'
+  - '\b(passwd|userdel|useradd)\b'
+  - '/etc/(shadow|sudoers)'
+  - '\.\./'
+  - '\bsystemctl\b|\bjournalctl\b'
+  - '\bsvc\s+(status|start|stop|restart)\s+(?!web\b)\S+'
+
+read:
+  - '^health$'
+  - '^svc status web$'
+  - '^tail -n 20 /var/log/app/app\.log$'
+  - '^df -P /var/log$'
+  - '^ls /srv$'
+
+autonomous:
+  - id: restart-web
+    match: '^(svc restart web|restart-web|restart web( service)?)$'
+    capability: shell.write
+    command: 'svc restart web'
+    snapshots:
+      - { kind: service, name: web }
+    inverse: ''
+    health: 'health'
+    risk: low
+    timeoutS: 30
+  - id: restore-config
+    match: '^(restore-config|restore config|cp /srv/app\.conf\.good /etc/app\.conf)$'
+    capability: shell.write
+    command: 'cp /srv/app.conf.good /etc/app.conf'
+    snapshots:
+      - { kind: file, path: /etc/app.conf }
+    inverse: ''
+    health: 'health'
+    risk: low
+    timeoutS: 30
+  - id: restore-folder
+    match: '^(restore-folder|restore folder|cp -a /srv/app\.snapshot /srv/app)$'
+    capability: shell.write
+    command: 'cp -a /srv/app.snapshot /srv/app'
+    snapshots:
+      - { kind: dir, path: /srv/app }
+    inverse: ''
+    health: 'test -d /srv/app && (cd /srv && sha256sum -c --quiet app.manifest) && health'
+    risk: low
+    timeoutS: 30
+  - id: rotate-logs
+    match: '^(rotate-logs|rotate logs)$'
+    capability: shell.write
+    command: 'rotate-logs'
+    snapshots: []
+    inverse: 'rotate-logs undo'
+    health: 'health'
+    risk: low
+    timeoutS: 30
+
+write:
+  - '^svc (start|stop) web$'
+
+destructive:
+  - '\b(truncate|shred|unlink)\b'
+  - '\b(chown|chmod)\s+-R\b'

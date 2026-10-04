@@ -47,6 +47,7 @@ import OpenIncidentReducer from "./open_incident_reducer";
 import RecordChangeReducer from "./record_change_reducer";
 import RecordFixResultReducer from "./record_fix_result_reducer";
 import RecordResultReducer from "./record_result_reducer";
+import RecordSkillUseReducer from "./record_skill_use_reducer";
 import RegisterDeviceReducer from "./register_device_reducer";
 import RequestGrantReducer from "./request_grant_reducer";
 import RequestRollbackReducer from "./request_rollback_reducer";
@@ -54,6 +55,7 @@ import RevokeAllReducer from "./revoke_all_reducer";
 import SubmitRequestReducer from "./submit_request_reducer";
 import UpdateIncidentReducer from "./update_incident_reducer";
 import UpdateRequestReducer from "./update_request_reducer";
+import UpsertSkillReducer from "./upsert_skill_reducer";
 
 // Import all procedure arg schemas
 
@@ -65,6 +67,7 @@ import EventRow from "./event_table";
 import IncidentRow from "./incident_table";
 import RunResultRow from "./run_result_table";
 import RunbookTrustRow from "./runbook_trust_table";
+import SkillRow from "./skill_table";
 import TrustRow from "./trust_table";
 import UserRequestRow from "./user_request_table";
 
@@ -149,6 +152,17 @@ const tablesSchema = __schema({
       { name: 'runbook_trust_runbook_id_key', constraint: 'unique', columns: ['runbookId'] },
     ],
   }, RunbookTrustRow),
+  skill: __table({
+    name: 'skill',
+    indexes: [
+      { accessor: 'slug', name: 'skill_slug_idx_btree', algorithm: 'btree', columns: [
+        'slug',
+      ] },
+    ],
+    constraints: [
+      { name: 'skill_slug_key', constraint: 'unique', columns: ['slug'] },
+    ],
+  }, SkillRow),
   trust: __table({
     name: 'trust',
     indexes: [
@@ -188,6 +202,7 @@ const reducersSchema = __reducers(
   __reducerSchema("record_change", RecordChangeReducer),
   __reducerSchema("record_fix_result", RecordFixResultReducer),
   __reducerSchema("record_result", RecordResultReducer),
+  __reducerSchema("record_skill_use", RecordSkillUseReducer),
   __reducerSchema("register_device", RegisterDeviceReducer),
   __reducerSchema("request_grant", RequestGrantReducer),
   __reducerSchema("request_rollback", RequestRollbackReducer),
@@ -195,6 +210,7 @@ const reducersSchema = __reducers(
   __reducerSchema("submit_request", SubmitRequestReducer),
   __reducerSchema("update_incident", UpdateIncidentReducer),
   __reducerSchema("update_request", UpdateRequestReducer),
+  __reducerSchema("upsert_skill", UpsertSkillReducer),
 );
 
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */

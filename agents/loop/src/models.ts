@@ -198,13 +198,15 @@ export function localAddendum(skill: string, toolNames: string[]): string {
   const line = skill.split('\n').find(l => /^named fixes/i.test(l)) ?? '';
   const fixes = [...line.matchAll(/`([a-z][a-z-]+)`/g)].map(m => m[1]);
   const check = skill.includes('settings get global wifi_on') ? '`settings get global wifi_on`' : '`health`';
+  const log = skill.includes('settings get global wifi_on') ? '' : ' and `tail -n 20 /var/log/app/app.log`';
   return [
     'FOLLOW THIS ORDER EXACTLY, one tool call at a time:',
-    `1. run_command with the check ${check}.`,
-    `2. run_command with ONE fix, using exactly one of these names as the command: ${fixes.join(', ') || '(see runbook)'}.`,
+    `1. run_command with the check ${check}${log}: evidence first. From the output, decide what is wrong.`,
+    `2. run_command with ONE fix chosen from the evidence, using exactly one of these names as the command: ${fixes.join(', ') || '(see runbook)'}. Put your one-sentence diagnosis in its reason.`,
     `3. run_command with the check ${check} again.`,
-    '4. Stop. Reply with one short sentence and no tool call.',
+    '4. Stop. Reply with the line "DIAGNOSIS: <one sentence from the tool output>" and then one short sentence. No tool call.',
     `Only these tools exist: ${toolNames.join(', ')}. Call them with the tool-call mechanism, never by writing JSON in your reply.`,
+    ...(toolNames.includes('say') ? ['If the tool say exists, call it first with one short sentence of reasoning before each run_command.'] : []),
     'Never run any other command. If a result says pending or denied, stop and say so.',
   ].join('\n');
 }

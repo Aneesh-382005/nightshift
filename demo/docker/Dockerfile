@@ -1,5 +1,5 @@
 FROM python:3.12-slim
-COPY app.py run.sh /srv/
+COPY app.py run.sh status.html /srv/
 COPY svc health rotate-logs /usr/local/bin/
 COPY app.conf.good /srv/app.conf.good
 COPY site/ /srv/app/

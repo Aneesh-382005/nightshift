@@ -108,6 +108,21 @@ const userRequest = table({ name: 'user_request', public: true }, {
   tsUs: t.u64(),
 });
 
+// Skills library: known IT problems as markdown docs. Agents search it before acting; the dashboard visualises it.
+const skill = table({ name: 'skill', public: true }, {
+  slug: t.string().primaryKey(),
+  title: t.string(),
+  category: t.string(),            // service, disk, config, files, network, mobile, security, performance
+  tags: t.string(),                // comma separated search keywords
+  summary: t.string(),
+  body: t.string(),                // full markdown (symptoms, checks, fix, rollback, risk)
+  runbook: t.string(),             // named fix this skill points at, '' if none
+  risk: t.string(),                // safe | ask | hold
+  source: t.string(),              // library | learned
+  uses: t.u32(),
+  updatedAtUs: t.u64(),
+});
+
 const expireTick = table({ name: 'expire_tick' }, {
   scheduledId: t.u64().primaryKey().autoInc(),
   scheduledAt: t.scheduleAt(),
@@ -118,7 +133,7 @@ const reapTick = table({ name: 'reap_tick' }, {
 });
 
 const spacetimedb = schema({
-  warden, gate, device, trust, accessGrant, event, change, incident, runbookTrust, runResult, userRequest, expireTick, reapTick,
+  warden, gate, device, trust, accessGrant, event, change, incident, runbookTrust, runResult, userRequest, skill, expireTick, reapTick,
 });
 export default spacetimedb;
 
@@ -290,6 +305,33 @@ export const logEvent = spacetimedb.reducer(
   (ctx, a) => {
     if (!isGate(ctx) && !isWarden(ctx) && !isDevice(ctx)) throw new SenderError('not allowed');
     log(ctx, a.kind, a.device, a.grantId, a.detail);
+  }
+);
+
+// Gate-only: add or update a skill document (library files are synced from skills/*.md by the hub).
+export const upsertSkill = spacetimedb.reducer(
+  { slug: t.string(), title: t.string(), category: t.string(), tags: t.string(), summary: t.string(), body: t.string(),
+    runbook: t.string(), risk: t.string(), source: t.string() },
+  (ctx, a) => {
+    needGate(ctx);
+    if (!a.slug || a.slug.length > 80) throw new SenderError('bad slug');
+    if (a.body.length > 20000) throw new SenderError('body too long');
+    const old = ctx.db.skill.slug.find(a.slug);
+    const row = { ...a, uses: old ? old.uses : 0, updatedAtUs: nowUs(ctx) };
+    if (old) ctx.db.skill.slug.update(row); else ctx.db.skill.insert(row);
+    log(ctx, 'skill.saved', 'hub', 0n, a.slug);
+  }
+);
+
+// Gate-only: the agent consulted a skill (bumps the counter, logs an event the dashboard animates).
+export const recordSkillUse = spacetimedb.reducer(
+  { slug: t.string(), query: t.string(), requestId: t.u64() },
+  (ctx, a) => {
+    needGate(ctx);
+    const old = ctx.db.skill.slug.find(a.slug);
+    if (!old) throw new SenderError('no such skill');
+    ctx.db.skill.slug.update({ ...old, uses: old.uses + 1 });
+    log(ctx, 'skill.used', 'hub', 0n, JSON.stringify({ slug: a.slug, title: old.title, query: a.query.slice(0, 120), requestId: Number(a.requestId) }));
   }
 );
 

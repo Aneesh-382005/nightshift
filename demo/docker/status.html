@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>machine status</title>
+<style>
+:root{--cream:#f3ead2;--amber:#f2b24c;--green:#7fcf8a;--rose:#c77d7d;--dim:#8fa59a}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:linear-gradient(#061220,#0d2a26);color:var(--cream);font:16px/1.4 "DejaVu Sans",system-ui,sans-serif;display:flex;flex-direction:column;padding:4vmin;gap:2.2vmin;overflow:hidden}
+h1{margin:0;font:700 clamp(22px,6vmin,44px) "DejaVu Serif",Georgia,serif;display:flex;align-items:center;gap:.6em}
+h1 .moon{width:.8em;height:.8em;border-radius:50%;box-shadow:inset -.25em -.05em 0 0 var(--cream);flex:none}
+.big{border-radius:18px;padding:2.2vmin 3vmin;font:700 clamp(26px,9vmin,72px) "DejaVu Serif",Georgia,serif;text-align:center;border:3px solid var(--green);color:var(--green);background:#0e2a2a99;transition:all .25s}
+.big.warn{border-color:var(--amber);color:var(--amber)}
+.big.bad{border-color:var(--rose);color:var(--rose)}
+.stats{display:flex;gap:2vmin;flex-wrap:wrap}
+.stat{flex:1 1 90px;background:#0e2a2a99;border-radius:14px;padding:1.4vmin 2vmin}
+.stat b{display:block;font:700 clamp(18px,4.6vmin,32px) "DejaVu Sans Mono",monospace}
+.stat span{color:var(--dim);font-size:clamp(11px,2.2vmin,14px);text-transform:uppercase;letter-spacing:.08em}
+pre{margin:0;flex:1;min-height:0;background:#04101a;border-radius:14px;padding:1.6vmin 2vmin;font:clamp(11px,2.4vmin,15px)/1.5 "DejaVu Sans Mono",monospace;color:#b9cfc4;overflow:hidden;white-space:pre-wrap;word-break:break-all}
+small{color:var(--dim);font-size:clamp(10px,2vmin,13px)}
+</style></head>
+<body>
+<h1><span class="moon"></span><span id="name">machine</span></h1>
+<div id="big" class="big">...</div>
+<div class="stats">
+  <div class="stat"><span>uptime</span><b id="up">-</b></div>
+  <div class="stat"><span>disk</span><b id="disk">-</b></div>
+  <div class="stat"><span>logs</span><b id="logs">-</b></div>
+</div>
+<pre id="log">waiting for the machine...</pre>
+<small id="foot">refreshes every 1 s, stand-in container</small>
+<script>
+var $=function(i){return document.getElementById(i)};
+function fmt(s){if(s<60)return s+" s";if(s<3600)return Math.floor(s/60)+" m "+(s%60)+" s";return Math.floor(s/3600)+" h "+Math.floor(s%3600/60)+" m"}
+function tick(){
+  fetch("/status",{cache:"no-store"}).then(function(r){return r.json()}).then(function(s){
+    $("name").textContent=s.name;
+    var b=$("big");b.textContent=s.headline;b.className="big"+(s.level==="warn"?" warn":s.level==="bad"?" bad":"");
+    $("up").textContent=fmt(s.uptimeS);$("disk").textContent=s.diskPct+"%";$("logs").textContent=s.logMB+" MB";
+    $("log").textContent=s.log.length?s.log.join("\n"):"(no log lines yet)";
+    $("foot").textContent="refreshes every 1 s, stand-in container, "+new Date().toLocaleTimeString();
+  }).catch(function(){
+    var b=$("big");b.textContent="DOWN: no response";b.className="big bad";
+    $("foot").textContent="cannot reach the machine, "+new Date().toLocaleTimeString();
+  });
+}
+tick();setInterval(tick,1000);
+</script></body></html>

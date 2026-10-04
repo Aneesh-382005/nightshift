@@ -57,7 +57,7 @@ export function Flower({ id, state }: { id: string; state: FlowerState }) {
         <g transform={state === 'wilted' ? `translate(${head.x} ${head.y}) rotate(110) scale(.8)` : 'translate(50 50)'}>
           {Array.from({ length: 6 }, (_, k) => (
             <ellipse key={k} cx="0" cy="-15" rx="8" ry="15" transform={`rotate(${k * 60})`}
-              fill={state === 'wilted' ? 'var(--gray)' : petal} opacity={state === 'wilted' ? 0.8 : 1} />
+              fill={state === 'wilted' ? 'var(--gray)' : petal} opacity={state === 'wilted' ? 0.8 : 1} stroke="var(--petal-edge)" strokeWidth="1.5" />
           ))}
           <circle r="8" fill={state === 'wilted' ? 'var(--soil)' : center} />
         </g>
@@ -91,7 +91,7 @@ export function Plant({ stage }: { stage: 0 | 1 | 2 | 3 }) {
       {stage === 2 && <path d="M60 30 C72 40 72 56 60 62 C48 56 48 40 60 30Z" fill="var(--blush)" stroke="var(--cream)" strokeWidth="2" />}
       {stage === 3 && (
         <g transform="translate(60 48)">
-          {Array.from({ length: 8 }, (_, k) => <ellipse key={k} cx="0" cy="-17" rx="8" ry="16" transform={`rotate(${k * 45})`} fill={k % 2 ? 'var(--lavender)' : 'var(--blush)'} />)}
+          {Array.from({ length: 8 }, (_, k) => <ellipse key={k} cx="0" cy="-17" rx="8" ry="16" transform={`rotate(${k * 45})`} fill={k % 2 ? 'var(--lavender)' : 'var(--blush)'} stroke="var(--petal-edge)" strokeWidth="1.5" />)}
           <circle r="9" fill="var(--lantern)" />
         </g>
       )}
@@ -110,11 +110,11 @@ export function SkyBody({ sun }: { sun: boolean }) {
         </mask>
       </defs>
       <g className="moon">
-        <circle cx="80" cy="80" r="46" fill="var(--cream)" mask="url(#crescent)" />
+        <circle cx="80" cy="80" r="46" fill="var(--moon)" mask="url(#crescent)" />
       </g>
       <g className="sun">
-        {Array.from({ length: 12 }, (_, k) => <line key={k} x1="80" y1="14" x2="80" y2="30" stroke="var(--lantern)" strokeWidth="6" strokeLinecap="round" transform={`rotate(${k * 30} 80 80)`} />)}
-        <circle cx="80" cy="80" r="36" fill="var(--lantern)" />
+        {Array.from({ length: 12 }, (_, k) => <line key={k} x1="80" y1="14" x2="80" y2="30" stroke="var(--sun-edge)" strokeWidth="6" strokeLinecap="round" transform={`rotate(${k * 30} 80 80)`} />)}
+        <circle cx="80" cy="80" r="36" fill="var(--lantern)" stroke="var(--sun-edge)" strokeWidth="3" />
       </g>
     </svg>
   )

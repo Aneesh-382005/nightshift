@@ -83,3 +83,40 @@ export class HostTarget implements Target {
     return { code: r.code, output: merge(r.stdout, r.stderr) + (timedOut ? `\n[timeout after ${timeoutS}s]` : ''), timedOut };
   }
 }
+
+export interface SshOpts { host?: string; port?: number; user: string; key: string; knownHosts?: string }
+
+/**
+ * A machine reached over SSH (key only, BatchMode). Same contract as the other targets: `sh -c` on the far side with a
+ * remote `timeout` so a hung command is really killed, plus a Node-side timer that kills the ssh client.
+ * Host keys: accept-new, kept in a per-device known_hosts file (rebuilding the box changes its key: delete that file).
+ */
+export class SshTarget implements Target {
+  readonly flavor = 'linux' as const;
+  readonly kind = 'ssh';
+  private readonly host: string; private readonly port: number;
+  constructor(readonly id: string, private o: SshOpts, readonly name = `${id} (ssh ${o.user}@${o.host ?? '127.0.0.1'}:${o.port ?? 22})`) {
+    this.host = o.host ?? '127.0.0.1'; this.port = o.port ?? 22;
+  }
+
+  private args(remote: string): string[] {
+    const known = this.o.knownHosts ?? path.resolve(import.meta.dirname, '..', '.state', `${this.id}.known_hosts`);
+    fs.mkdirSync(path.dirname(known), { recursive: true });
+    return ['-i', this.o.key, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'StrictHostKeyChecking=accept-new',
+      '-o', `UserKnownHostsFile=${known}`, '-o', 'ConnectTimeout=5', '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=2',
+      '-p', String(this.port), `${this.o.user}@${this.host}`, '--', remote];
+  }
+
+  async available() {
+    const r = await capture('ssh', this.args('true'), 10000);
+    return r.code === 0 ? null : `ssh ${this.o.user}@${this.host}:${this.port}: ${(r.stderr || r.stdout).trim().split('\n').pop()}`;
+  }
+
+  async run(command: string, timeoutS: number): Promise<RunResult> {
+    const r = await capture('ssh', this.args(`timeout -s KILL ${timeoutS} sh -c ${shq(command)}`), (timeoutS + 8) * 1000);
+    const timedOut = r.timedOut || r.code === 137 || r.code === 124;
+    // ssh itself fails with 255 (connection, auth); a remote command can only return 255 by choosing to.
+    const note = r.code === 255 ? '\n[ssh connection failed]' : timedOut ? `\n[timeout after ${timeoutS}s]` : '';
+    return { code: r.code, output: merge(r.stdout, r.stderr) + note, timedOut };
+  }
+}

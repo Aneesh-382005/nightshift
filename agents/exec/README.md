@@ -82,7 +82,23 @@ Faults (run on the VPS, or `ssh vps 'sh nightshift-vps/demo/vps/break.sh disk'`;
 
 Health command for all but folder: `health`. For folder: `test -d srv/app && (cd srv && sha256sum -c --quiet app.manifest) && health`. Policy for the gateway (device type host, ids like vps-1): autonomous or ask entries for exactly the four commands above plus read commands `health`, `svc status web`, `tail -n 20 log/app/app.log`, `df -P .`, `du -sk tmp`, `ls srv`; forbid sudo, anything with absolute paths outside the root, `..`, network tools (curl, wget, nc, ssh, scp), `rm`, `systemctl`, `svc` with any name but `web`, and `mv`/`cp` targets outside the root.
 
+## ssh target (heal a machine over SSH)
+Device `ssh-box` (kind `ssh`, `SshTarget`): same contract as the docker target, but commands go through `ssh -i key -o BatchMode=yes -o StrictHostKeyChecking=accept-new -p 2222 nsuser@127.0.0.1 -- timeout -s KILL N sh -c '<cmd>'` (plus IdentitiesOnly, a per-device known_hosts file in `agents/exec/.state/`, connect timeout and keepalives). Remote `timeout` really kills a hung command; ssh exit 255 is reported as `[ssh connection failed]`. Snapshots (`file`, `dir`, `service`), inverses, verification, health and the monitor probe are the shared helpers. If you rebuild the box its host key changes: delete `.state/ssh-box.known_hosts`.
+
+The box (`demo/ssh/`, SANDBOX container `ssh-box`): python:3.12-slim + openssh-server, the same demo service and known-good copies as web-1 (so the linux-server runbooks apply unchanged), key-only auth for the unprivileged user `nsuser` (no password, no root login, no sudo, no tty, no forwarding), published on 127.0.0.1:2222 only. The ed25519 keypair is throwaway, created by `demo/ssh/setup.sh` in `demo/ssh/keys/` (gitignored).
+```
+sh demo/ssh/setup.sh                                          # keypair, once
+docker compose -f demo/ssh/docker-compose.yml up -d --build   # container ssh-box on 127.0.0.1:2222
+ssh -i demo/ssh/keys/id_ed25519 -p 2222 nsuser@127.0.0.1 health   # manual check
+demo/ssh/break.sh service|disk|config|folder|all              # faults (docker exec as nsuser)
+demo/ssh/reset.sh
+# executor: ssh-box is in the default device list; to run only it:
+cd agents/exec && NIGHTSHIFT_DEVICES=ssh-box npm start        # registers device ssh-box in the DB (live stack: only when told)
+```
+Targets file form: `{"id":"ssh-box","type":"ssh","host":"127.0.0.1","port":2222,"user":"nsuser","key":"/path/to/key"}`. Fix list for the gateway, identical to linux-server (paths absolute, as in web-1): restart-web `svc restart web`; restore-config `cp /srv/app.conf.good /etc/app.conf`; restore-folder `cp -a /srv/app.snapshot /srv/app` (snapshot kind dir); rotate-logs `rotate-logs` with inverse `rotate-logs undo`; health `health` (folder: `test -d /srv/app && (cd /srv && sha256sum -c --quiet app.manifest) && health`).
+
 ## Tests
+`npm run test:ssh`: starts only the ssh-box container (stops it afterwards if the test started it), checks key-only auth, nsuser, no sudo, exit codes, remote timeout kill, the monitor probe, and the four runbooks with snapshot, inverse and verification. No executor, no DB, no gate.
 `npm run test:host` runs the host target locally in a throwaway root with a throwaway systemd user unit (`ns-demo-test`, port 18090, removed afterwards), fake webhook :18789, device `vps-test`: registration, vitals, alert per fault with debounce, and each runbook with snapshot, inverse and verification. It does not claim the gate.
 `npm run test:monitor` (vitals, alert, debounce, no repeat; own fake webhook on :18787) and `npm run test:folder` (monitor sees deleted folders on laptop and web-2, restore pieces, inverse and verification; fake webhook on :18788). Neither claims the gate. Neither tests the grant path for `dir` snapshots end to end, `npm test` does that for the other kinds.
 

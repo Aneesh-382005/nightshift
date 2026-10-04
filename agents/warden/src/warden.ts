@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { DbConnection, tables } from '../../common/src/module_bindings/index.js';
 import crypto from 'node:crypto';
 import { startHttp } from './http.js';
+import { trustView } from './trust.js';
+import { DownTracker, RANK, alternateLeds, chaseLeds, sweepLeds, thinkActive } from './lifecycle.js';
 import { Bridge, type Backend, type ButtonName, type LedMode } from './bridge.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -38,8 +40,9 @@ const secs = (us: bigint) => Number(us) / 1e6;
 
 // ---------- view model ----------
 type Rgb = [number, number, number];
-interface View { lines: string[]; led: Rgb; mode: LedMode; dim?: boolean }
-interface Overlay { view: View; untilMs: number }
+interface View { lines: string[]; led: Rgb; mode: LedMode; dim?: boolean; leds?: Rgb[] }
+// A timed screen. `view` may be lazy so it reads fresh data (the trust row) when it is shown.
+interface Overlay { view: View | (() => View | undefined); fromMs: number; untilMs: number; rank: number }
 
 const GREEN: Rgb = [0, 200, 0], DIM_GREEN: Rgb = [0, 40, 0], AMBER: Rgb = [255, 140, 0], RED: Rgb = [255, 0, 0];
 
@@ -56,7 +59,13 @@ function wrap(s: string, cols = COLS): string[] {
 const clip = (s: string, n = COLS) => (s.length > n ? s.slice(0, n - 1) + '~' : s);
 
 // ---------- state ----------
-let overlay: Overlay | undefined;
+let overlays: Overlay[] = [];
+const promotedAt = new Map<string, number>();   // runbookId -> ms, from trust.promoted events
+let lastHealthyAt = 0;
+const downs = new DownTracker();   // devices that are DOWN (incident opened or failing vitals)
+let lastThoughtAt = 0, lastThought = '', watchAt = 0;
+let lastSigAll = '';
+let lastLeds: Rgb[] | undefined;
 let armed: { grantId: bigint; button: ButtonName; untilMs: number } | undefined;
 let lastSig = '';
 let lastLedRefresh = 0;
@@ -66,8 +75,25 @@ let lastTone = 0;
 let bridge: Bridge;
 let conn: DbConnection;
 
-function show(lines: string[], led: Rgb, mode: LedMode, ms: number) {
-  overlay = { view: { lines, led, mode }, untilMs: Date.now() + ms };
+function show(lines: string[], led: Rgb, mode: LedMode, ms: number, rank: number = RANK.FEEDBACK) {
+  const now = Date.now();
+  overlays = [{ view: { lines, led, mode }, fromMs: now, untilMs: now + ms, rank }];
+}
+/** Show `first` for ms1, then `later` for ms2. */
+function showThen(first: View, ms1: number, later: () => View | undefined, ms2: number) {
+  const now = Date.now();
+  overlays = [{ view: first, fromMs: now, untilMs: now + ms1, rank: RANK.HEALTHY }, { view: later, fromMs: now + ms1, untilMs: now + ms1 + ms2, rank: RANK.HEALTHY }];
+}
+const PROMOTION_WINDOW_MS = 30_000;
+function runbookOf(grantId: bigint): string | undefined {
+  const g = conn.db.accessGrant.id.find(grantId);
+  if (!g) return undefined;
+  try { return JSON.parse(g.plan)?.runbookId || undefined; } catch { return undefined; }
+}
+function trustScreen(runbookId: string): View | undefined {
+  const row = conn.db.runbookTrust.runbookId.find(runbookId);
+  const promoted = Date.now() - (promotedAt.get(runbookId) ?? 0) < PROMOTION_WINDOW_MS;
+  return row ? trustView({ runbookId, successes: row.successes, level: row.level }, promoted) : undefined;
 }
 function tone(hz: number, ms = 200, amp = 0.3) { if (bridge?.ready) bridge.tone(hz, ms, amp); }
 
@@ -92,6 +118,7 @@ function lastEvents(n: number) {
 
 /** Pure render: what the Lantern shows right now. Priority: pending > overlay > active > idle. */
 function computeView(): View {
+  const cands: { rank: number; view: View }[] = [];
   const now = nowUs();
   const pend = pendingGrants();
   if (pend.length) {
@@ -110,22 +137,49 @@ function computeView(): View {
     else lines.push(HOLD_CAPS.has(g.capability) ? 'g/b twice: approve' : 'green 120s  blue 30s');
     if (pend.length > 1) lines.push(`+${pend.length - 1} more waiting`);
     if (armed && armed.grantId === g.id && armed.untilMs > Date.now()) lines[0] = 'CONFIRM';
-    return { lines, led: AMBER, mode: 'pulse' };
+    cands.push({ rank: RANK.PENDING, view: { lines, led: AMBER, mode: 'pulse' } });
   }
-  if (overlay && overlay.untilMs > Date.now()) return overlay.view;
+  const t = Date.now();
+  for (const o of overlays) {
+    if (o.fromMs <= t && t < o.untilMs) {
+      const v = typeof o.view === 'function' ? o.view() : o.view;
+      if (v) cands.push({ rank: o.rank, view: v });
+    }
+  }
   const act = activeApproved()[0];
   if (act) {
     const left = Math.max(0, Math.ceil(secs(act.expiresAtUs - now)));
     const expiring = left <= EXPIRING_S;
-    return {
-      lines: ['ACTIVE', act.target, clip(act.capability), ...wrap(`$ ${act.command}`).slice(0, 4), `${left}s left  red=revoke`],
+    cands.push({ rank: RANK.FIXING, view: {
+      lines: ['FIXING', act.target, clip(act.capability), ...wrap(`$ ${act.command}`).slice(0, 4), `${left}s left  red=revoke`],
       led: expiring ? RED : AMBER, mode: expiring ? 'blink' : 'solid',
-    };
+    } });
   }
-  return { lines: ['IDLE', 'Nightshift idle'], led: DIM_GREEN, mode: 'solid', dim: true };
+  if (thinkActive(lastThoughtAt, t, anyRequestRunning())) {   // agent is reasoning: amber chase
+    cands.push({ rank: RANK.THINK, view: { lines: ['THINK', ...wrap(lastThought).slice(0, 3)], led: AMBER, leds: chaseLeds(t), mode: 'solid' } });
+  }
+  const down = downs.list(t);
+  if (down.length) cands.push({ rank: RANK.DOWN, view: { lines: ['DOWN', ...down], led: RED, mode: 'blink' } });
+  const sweep = sweepLeds(watchAt, t);   // a vitals event: one gold LED sweeps across
+  if (sweep) cands.push({ rank: RANK.WATCH, view: { lines: ['WATCH'], led: [255, 190, 0], leds: sweep, mode: 'solid' } });
+  cands.push({ rank: RANK.IDLE, view: { lines: ['IDLE', 'Nightshift idle'], led: DIM_GREEN, mode: 'solid', dim: true } });
+  return cands.reduce((best, c) => (c.rank < best.rank ? c : best)).view;   // priority order: lowest rank wins
+}
+function anyRequestRunning() {
+  for (const r of conn.db.userRequest.iter()) if (r.status === 'running') return true;
+  return false;
 }
 
-function setLeds(v: View) {
+function setLeds(v: View, full = false) {
+  if (v.leds) {  // per-LED colours (meter, sweep, chase): send only the LEDs that changed
+    v.leds.forEach((c, i) => {
+      const p = lastLeds?.[i];
+      if (full || !p || p[0] !== c[0] || p[1] !== c[1] || p[2] !== c[2]) bridge.led(c[0], c[1], c[2], 'solid', [i]);
+    });
+    lastLeds = v.leds;
+    return;
+  }
+  lastLeds = undefined;
   if (v.dim) {   // idle: one dim LED, the rest off
     bridge.led(0, 0, 0, 'solid', 'all');
     bridge.led(v.led[0], v.led[1], v.led[2], v.mode, [0]);
@@ -134,29 +188,28 @@ function setLeds(v: View) {
 
 function render(force = false) {
   const v = computeView();
-  // countdown lines change every second; signature includes them so the display refreshes
-  const sig = JSON.stringify([v.lines, v.led, v.mode]);
-  if (sig !== lastSig || force) {
-    lastSig = sig;
+  const sigTxt = JSON.stringify([v.lines, v.led, v.mode]);          // console and display
+  const sigAll = JSON.stringify([v.lines, v.led, v.leds, v.mode]);  // plus per-LED patterns
+  if (sigTxt !== lastSig || force) {
+    lastSig = sigTxt;
     console.log(`[warden] ${v.lines.join(' | ')}  led=${v.led.join(',')} ${v.mode}`);
-    if (bridge?.ready) {
-      bridge.text(v.lines.join('\n'));
-      setLeds(v);
-      lastLedRefresh = Date.now();
-    }
-  } else if (bridge?.ready && Date.now() - lastLedRefresh > 2000) {
-    // LED duration semantics on OneWili are unverified, so keep re-asserting the state
-    setLeds(v);
-    lastLedRefresh = Date.now();
+    if (bridge?.ready) bridge.text(v.lines.join('\n'));
+  }
+  if (bridge?.ready) {
+    if (sigAll !== lastSigAll || force) { lastSigAll = sigAll; setLeds(v, force); lastLedRefresh = Date.now(); }
+    else if (Date.now() - lastLedRefresh > 2000) { setLeds(v, true); lastLedRefresh = Date.now(); }   // OneWili LED duration is unverified: re-assert
   }
 }
 
 // ---------- events -> overlays and sounds ----------
 function onEvent(e: { kind: string; device: string; detail: string; grantId: bigint }) {
+  downs.onEvent(e.kind, e.device, e.detail, Date.now());
   switch (e.kind) {
+    case 'vitals': watchAt = Date.now(); render(); return;   // a quiet sweep, no log line per probe
+    case 'agent.thought': lastThoughtAt = Date.now(); lastThought = e.detail; break;
     case 'grant.denied':
       if (e.detail.startsWith('policy')) {
-        show(['BLOCKED', 'policy', e.device, ...wrap(e.detail.replace(/^policy:\s*/, ''))], RED, 'solid', 4000);
+        show(['BLOCKED', 'policy', e.device, ...wrap(e.detail.replace(/^policy:\s*/, ''))], RED, 'solid', 4000, RANK.BLOCKED);
         tone(180, 500);
       } else if (e.detail === 'warden') {
         show(['DENIED'], RED, 'blink', 2000);
@@ -171,13 +224,17 @@ function onEvent(e: { kind: string; device: string; detail: string; grantId: big
       tone(180, 400);
       break;
     case 'fix.autonomous':
-      show(['AUTOFIX', e.device, ...wrap(e.detail).slice(0, 3)], AMBER, 'solid', 1500);
+      show(['FIXING', e.device, ...wrap(e.detail).slice(0, 3)], AMBER, 'solid', 1500, RANK.FIXING);
       tone(1200, 40, 0.2);
       break;
-    case 'health.passed':
-      show(['HEALTHY', e.device], GREEN, 'solid', 3000);
+    case 'health.passed': {
+      const rb = runbookOf(e.grantId);   // only fixes carry a runbook; plain health reads do not
+      lastHealthyAt = Date.now();
+      if (rb) showThen({ lines: ['HEALTHY', e.device], led: GREEN, mode: 'solid' }, 3000, () => trustScreen(rb), 6000);
+      else show(['HEALTHY', e.device], GREEN, 'solid', 3000, RANK.HEALTHY);
       tone(1320, 120, 0.25);
       break;
+    }
     case 'health.failed':
       show(['FAILED', e.device, 'rolling back'], RED, 'blink', 4000);
       tone(200, 400);
@@ -187,11 +244,12 @@ function onEvent(e: { kind: string; device: string; detail: string; grantId: big
       tone(660, 150);
       break;
     case 'trust.promoted':
-      show(['TRUSTED', e.detail, 'now heals alone'], GREEN, 'solid', 4000);
+      promotedAt.set(e.detail, Date.now());   // the trust screen after HEALTHY then reads EARNED
+      if (Date.now() - lastHealthyAt > 5000) show(['EARNED', e.detail, 'now heals alone'], [255, 190, 0], 'pulse', 6000, RANK.HEALTHY);
       tone(990, 120); setTimeout(() => tone(1320, 160), 160);
       break;
     case 'incident.escalated':
-      show(['ESCALATE', e.device, 'human needed'], AMBER, 'pulse', 8000);
+      { const t0 = Date.now(); overlays = [{ view: () => ({ lines: ['ESCALATE', e.device, 'human needed'], led: RED, leds: alternateLeds(Date.now()), mode: 'solid' as LedMode }), fromMs: t0, untilMs: t0 + 15000, rank: RANK.ESCALATE }]; }
       tone(880, 250);
       break;
   }
@@ -343,6 +401,8 @@ await conn.reducers.claimWarden({ secret: WARDEN_SECRET });
 console.log('[warden] warden identity claimed');
 
 conn.db.event.onInsert((_ctx, e) => { if (applied) onEvent(e); });
+conn.db.runbookTrust.onInsert(() => { if (applied) render(); });
+conn.db.runbookTrust.onUpdate(() => { if (applied) render(); });
 conn.db.accessGrant.onInsert(() => { if (applied) { onNewPending(); render(); } });
 conn.db.accessGrant.onUpdate(() => { if (applied) { onNewPending(); render(); } });
 
@@ -350,14 +410,14 @@ await new Promise<void>(resolve => {
   conn.subscriptionBuilder()
     .onApplied(() => resolve())
     .onError(ctx => { console.error('[warden] subscription error', ctx.event); shutdown(1); })
-    .subscribe([tables.accessGrant, tables.change, tables.device, tables.event]);
+    .subscribe([tables.accessGrant, tables.change, tables.device, tables.event, tables.runbookTrust, tables.userRequest]);
 });
 applied = true;
 for (const g of pendingGrants()) seenPending.add(g.id);   // do not chime for grants that predate us (still shown)
 console.log(`[warden] subscribed. ${pendingGrants().length} pending at start`);
 tone(1000, 80, 0.2);
 render(true);
-setInterval(render, 250);
+setInterval(render, 100);   // fast enough for the 150 ms chase and the 600 ms sweep
 setupKeys();
 if (HTTP_PORT > 0) {
   const token = crypto.randomBytes(12).toString('hex');

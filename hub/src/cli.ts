@@ -4,10 +4,12 @@
 //   npx tsx src/cli.ts run <device> <command...> [--reason "why"] [--wait seconds]
 //   npx tsx src/cli.ts get <grantId>
 //   npx tsx src/cli.ts close-incidents
+//   npx tsx src/cli.ts sync-skills       (skills/*.md -> skill table)
 // A pending grant is approved by the warden, not by this tool:
 //   spacetime call nightshift decide_grant <grantId> true 60 --server local
 import { connectGate, markQuitting } from './hub.js';
 import { Gateway } from './gateway.js';
+import { syncSkills } from './skills.js';
 import { classify, deviceTypeFor } from './policy.js';
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -23,7 +25,7 @@ if (cmd === 'classify') {
   console.log(JSON.stringify(classify(words.join(' '), deviceTypeFor(device)), (_k, v) => (v instanceof RegExp ? v.source : v), 2));
   process.exit(0);
 }
-if (!cmd || !['devices', 'run', 'get', 'close-incidents'].includes(cmd)) usage();
+if (!cmd || !['devices', 'run', 'get', 'close-incidents', 'sync-skills'].includes(cmd)) usage();
 
 let reason = 'cli test';
 const args: string[] = [];
@@ -49,6 +51,9 @@ try {
     const open = [...conn.db.incident.iter()].filter(i => i.status === 'open' || i.status === 'escalated' || i.status === 'rolled_back');
     for (const i of open) await conn.reducers.updateIncident({ id: i.id, status: 'failed', attempts: i.attempts });
     console.log(`closed ${open.length} incidents`);
+  } else if (cmd === 'sync-skills') {
+    const r = await syncSkills(conn);
+    console.log(`synced ${r.synced} skills${r.skipped.length ? `, skipped ${r.skipped.length}: ${r.skipped.join(', ')}` : ''}`);
   } else if (cmd === 'get') {
     if (!args[0]) usage();
     console.log(JSON.stringify(await gw.getResult(BigInt(args[0])), null, 2));

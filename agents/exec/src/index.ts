@@ -6,15 +6,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DeviceExecutor } from './executor.js';
 import { connect } from './spacetime.js';
-import { AdbTarget, DockerTarget, HostTarget, type Target } from './targets.js';
+import { AdbTarget, DockerTarget, HostTarget, SshTarget, type Target } from './targets.js';
 import { capture } from './util.js';
 
 const PIXEL_SERIAL = process.env.PIXEL_SERIAL ?? '54241FDAP002UZ';
 const HERE = import.meta.dirname;
 
-interface Entry { id: string; type: 'docker' | 'adb' | 'host'; root?: string; serial?: string; name?: string; container?: string }
+interface Entry { id: string; type: 'docker' | 'adb' | 'host' | 'ssh'; root?: string; serial?: string; name?: string; container?: string; host?: string; port?: number; user?: string; key?: string }
 function build(e: Entry): Target {
   if (e.type === 'host') return new HostTarget(e.id, e.root ?? process.env.NS_ROOT ?? '~/ns-demo', e.name);
+  if (e.type === 'ssh') return new SshTarget(e.id, { host: e.host, port: e.port, user: e.user ?? 'nsuser', key: e.key ?? path.resolve(HERE, '..', '..', '..', 'demo', 'ssh', 'keys', 'id_ed25519') }, e.name);
   if (e.type === 'adb') return new AdbTarget(e.id, e.serial ?? PIXEL_SERIAL, e.name);
   if (e.id === 'laptop') return new DockerTarget('laptop', e.name ?? 'laptop (SANDBOX ~/nightshift-playground)', e.container ?? 'laptop-sandbox', 'laptop');
   return new DockerTarget(e.id, e.name, e.container);
@@ -22,6 +23,7 @@ function build(e: Entry): Target {
 
 const defaults: Entry[] = [
   { id: 'web-1', type: 'docker' }, { id: 'web-2', type: 'docker' }, { id: 'pixel', type: 'adb' },
+  { id: 'ssh-box', type: 'ssh', host: '127.0.0.1', port: 2222, user: 'nsuser' },   // SANDBOX container reached over ssh (demo/ssh)
   { id: 'laptop', type: 'docker' },   // SANDBOX only: a container mounting just ~/nightshift-playground
 ];
 const targetsFile = process.env.NS_TARGETS ?? path.resolve(HERE, '..', 'targets.json');

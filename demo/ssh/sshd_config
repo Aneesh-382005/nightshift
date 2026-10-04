@@ -1,0 +1,12 @@
+Port 22
+ListenAddress 0.0.0.0
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+PubkeyAuthentication yes
+AllowUsers nsuser
+AuthorizedKeysFile /etc/ssh/authorized_keys/%u
+AllowTcpForwarding no
+X11Forwarding no
+PermitTTY no
+LogLevel ERROR

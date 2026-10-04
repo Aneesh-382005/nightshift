@@ -57,13 +57,13 @@ Note: gemini-3.8-flash returns 429 on every request (quota); flash-lite serves e
 - web-1 config got corrupted during a run; cause not fully identified (possibly a dashboard Break button click).
 - Two alerts on one device (one from /break, one from the monitor) made the agent flail; dedupe to one incident per device is being added by ns-gateway.
 
-## 4. In progress (sessions)
-| Session | Task |
-|---|---|
-| ns-exec | Real monitor (probe every 3 s, vitals events, auto alert on 2 failures); then laptop sandbox device and "folder deleted" heal |
-| ns-warden | `agents/loop`: own agent loop (Gemini REST, Ollama, fallback chain) |
-| ns-gateway | Stub harness for free pipeline tests, `NS_HARNESS=loop`, `demo/reset-all.sh`, exercise `/break` |
-| ns-ui | Break-something panel, Good morning report, blocked moment, Failed state, Lantern rename |
+## 4. Sessions (restarted Oct 4 about 08:55; all four came back with their memory)
+| Session | Built and reported | Now |
+|---|---|---|
+| nightshift-2b ns-gateway | policy, MCP, watcher, /alert /break /recap, dedupe, vitals-to-incident, CORS for the tailnet, up/down/doctor/reset-all | gate.decision reason events |
+| nightshift-26 ns-exec | docker, android, laptop sandbox, host target, monitor, VPS kit, recap generator | SSH target spike (new sshd container) |
+| nightshift-10 ns-warden | buttons stream, double-shake revokeAll, live-test (passed), auto-reconnect (mocked), agents/loop incl. offline mode | trust meter on the Lantern LEDs and screen |
+| nightshift-36 ns-ui | night garden, hold states, approval card, demo controls, recap button, morning card | light-theme contrast fix, why lines, agent trace, replay slider |
 
 ## 5. Not built yet
 - Vitals on the dashboard flowers (needs ns-exec monitor first)

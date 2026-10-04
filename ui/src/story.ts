@@ -8,13 +8,41 @@ export interface Req { id: bigint; text: string; status: string }
 export interface Dev { id: string; name: string; status: string }
 
 export type Tone = 'red' | 'blue' | 'amber' | 'green' | 'gray'
-export interface Step { key: string; kind: string; tone: Tone; text: string; tsUs: bigint; command?: string }
+export interface Step { key: string; kind: string; tone: Tone; text: string; tsUs: bigint; command?: string; why?: { text: string; tone: WhyTone } }
+export interface Decision { cls: string; reason: string; rule: string; escalated: boolean }
+export type WhyTone = 'amber' | 'green' | 'red'
+
+// gate.decision detail is JSON, but may be cut at 900 chars: fall back to pulling fields out with regexes.
+export function parseDecision(detail: string): Decision | null {
+  try {
+    const j = JSON.parse(detail)
+    return { cls: String(j.class ?? ''), reason: String(j.reason ?? ''), rule: String(j.rule ?? ''), escalated: j.escalated === true }
+  } catch {
+    const field = (k: string) => new RegExp(`"${k}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`).exec(detail)?.[1] ?? ''
+    const reason = field('reason').replace(/\\"/g, '"')
+    return reason ? { cls: field('class'), reason, rule: field('rule'), escalated: /"escalated"\s*:\s*true/.test(detail) } : null
+  }
+}
+
+export function decisionsByGrant(events: readonly Ev[]): Map<bigint, Decision> {
+  const m = new Map<bigint, Decision>()
+  for (const e of events) {
+    if (e.kind !== 'gate.decision' || !e.grantId) continue
+    const d = parseDecision(e.detail)
+    if (d) m.set(e.grantId, d)
+  }
+  return m
+}
+
+export const whyTone = (cls: string): WhyTone => (cls === 'forbidden' ? 'red' : cls === 'autonomous' || cls === 'read' ? 'green' : 'amber')
+
 export type Hold = 'wilted' | 'healing' | 'fixed' | undefined
 
 // Plain-English timeline for one incident, built only from rows.
 export function buildStory(
-  inc: Incident, events: readonly Ev[], grants: Map<bigint, Grant>, trusts: readonly Trust[], untilUs: bigint, hold?: Hold,
+  inc: Incident, events: readonly Ev[], grants: Map<bigint, Grant>, trusts: readonly Trust[], untilUs: bigint, hold?: Hold, decisions: Map<bigint, Decision> = new Map(),
 ): Step[] {
+  const whyUsed = new Set<bigint>()
   const steps: Step[] = [{ key: 'start', kind: 'incident', tone: 'red', text: `${inc.device} went down: ${inc.alert}`, tsUs: inc.tsUs }]
   const trust = trusts.find(t => t.runbookId === inc.runbookId)
   const mine = events
@@ -24,7 +52,16 @@ export function buildStory(
     const g = e.grantId ? grants.get(e.grantId) : undefined
     const command = g?.command || undefined
     const key = e.id.toString()
-    const add = (tone: Tone, text: string) => steps.push({ key, kind: e.kind, tone, text, tsUs: e.tsUs, command })
+    const add = (tone: Tone, text: string) => {
+      const step: Step = { key, kind: e.kind, tone, text, tsUs: e.tsUs, command }
+      const d = e.grantId ? decisions.get(e.grantId) : undefined
+      const carries = e.kind === 'grant.requested' || e.kind === 'grant.denied' || e.kind === 'fix.autonomous'
+      if (d && carries && !whyUsed.has(e.grantId) && (d.cls !== 'forbidden' || e.kind === 'grant.denied')) {
+        step.why = { text: d.reason, tone: whyTone(d.cls) }
+        whyUsed.add(e.grantId)
+      }
+      steps.push(step)
+    }
     switch (e.kind) {
       case 'grant.requested':
         if (g?.capability === 'shell.read') add('green', 'Nightshift read the logs')
@@ -95,4 +132,65 @@ export function effectiveStatus(inc: Incident, events: readonly Ev[], reqs: read
   const tag = `Incident #${inc.id}.`
   if (reqs.some(r => r.status === 'failed' && r.text.includes(tag))) return 'failed'
   return inc.status
+}
+
+export interface TraceLine { id: bigint; command: string; cls: string; capability: string; outcome: string }
+export interface Result { grantId: bigint; exitCode: number; healthOk: boolean; rolledBack: boolean }
+
+// Tool calls the agent made for this incident, in order: one run_command per grant.
+export function buildTrace(
+  inc: Incident, grants: readonly Grant[], decisions: Map<bigint, Decision>, results: Map<bigint, Result>, untilUs: bigint,
+): TraceLine[] {
+  return grants
+    .filter(g => g.target === inc.device && g.createdAtUs >= inc.tsUs && g.createdAtUs < untilUs)
+    .sort((a, b) => (a.id < b.id ? -1 : 1))
+    .map(g => {
+      const r = results.get(g.id)
+      const outcome = r
+        ? `exit ${r.exitCode}${r.exitCode === 0 ? `, health ${r.healthOk ? 'ok' : 'failed'}` : ''}${r.rolledBack ? ', rolled back' : ''}`
+        : g.status === 'denied' ? 'blocked, nothing ran' : g.status === 'pending' ? 'waiting for a press' : g.status
+      return { id: g.id, command: g.command || g.reason, cls: decisions.get(g.id)?.cls ?? '', capability: g.capability, outcome }
+    })
+}
+
+// Flower state at a moment in the night, rebuilt only from event, grant and incident rows.
+export function stateAt(
+  deviceId: string, t: bigint, events: readonly Ev[], grants: readonly Grant[], incidents: readonly Incident[],
+): 'bloom' | 'wilted' | 'asking' | 'blocked' {
+  const mine = events.filter(e => e.device === deviceId && e.tsUs <= t)
+  const blocked = mine.some(e => ((e.kind === 'grant.denied' && e.detail.startsWith('policy')) || e.kind.startsWith('policy.')) && t - e.tsUs < 6_000_000n)
+  if (blocked) return 'blocked'
+  const asking = grants.some(g => g.target === deviceId && g.capability !== 'shell.read' && g.createdAtUs <= t
+    && !events.some(e => e.grantId === g.id && e.tsUs <= t && (e.kind === 'grant.approved' || e.kind === 'grant.denied' || e.kind === 'grant.expired')))
+  if (asking) return 'asking'
+  const offline = [...mine].reverse().find(e => e.kind === 'device.offline' || e.kind === 'device.online')?.kind === 'device.offline'
+  const inc = incidents.filter(i => i.device === deviceId && i.tsUs <= t).sort((a, b) => (a.tsUs < b.tsUs ? 1 : -1))[0]
+  const open = inc !== undefined && !mine.some(e => e.tsUs > inc.tsUs && (e.kind === 'health.passed' || e.kind === 'incident.failed' || e.kind === 'change.rolled_back'))
+  return offline || open ? 'wilted' : 'bloom'
+}
+
+export interface Vitals { health?: number; diskPct?: number; wifi?: string; ok: boolean }
+
+// One definition of "failing" for both the flower and the terminal's patrol lines.
+export function parseVitals(detail: string): Vitals {
+  try {
+    const j = JSON.parse(detail)
+    const health = j.health == null ? undefined : Number(j.health)
+    const diskPct = j.diskPct == null ? undefined : Number(j.diskPct)
+    const wifi = j.wifi == null ? undefined : String(j.wifi)
+    const wifiBad = wifi !== undefined && /^(false|0|off|down|disconnected)$/i.test(wifi)
+    return { health, diskPct, wifi, ok: (health === undefined || health === 200) && !wifiBad }
+  } catch { return { ok: true } }
+}
+
+// Newest health signal per device: a vitals event, or a health.passed / health.failed result.
+export function healthSignals(eventsNewestFirst: readonly Ev[]): Map<string, { ok: boolean; tsUs: bigint }> {
+  const m = new Map<string, { ok: boolean; tsUs: bigint }>()
+  for (const e of eventsNewestFirst) {
+    if (!e.device || m.has(e.device)) continue
+    if (e.kind === 'vitals') m.set(e.device, { ok: parseVitals(e.detail).ok, tsUs: e.tsUs })
+    else if (e.kind === 'health.failed') m.set(e.device, { ok: false, tsUs: e.tsUs })
+    else if (e.kind === 'health.passed') m.set(e.device, { ok: true, tsUs: e.tsUs })
+  }
+  return m
 }

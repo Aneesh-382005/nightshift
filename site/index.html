@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f6f0e0" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b1d2a" media="(prefers-color-scheme: dark)">
+<title>Nightshift: Go to sleep. Nightshift is on.</title>
+<meta name="description" content="Nightshift is an AI agent that fixes what breaks while you sleep, with a FREE-WILi wristband, the Lantern, that glows when it needs you. Built solo at MHacks 26.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b1d2a'/%3E%3Ccircle cx='16' cy='16' r='8' fill='%23f4d58d'/%3E%3Ccircle cx='20' cy='13' r='7' fill='%230b1d2a'/%3E%3C/svg%3E">
+<style>
+  :root {
+    color-scheme: light dark;
+    /* tokens: light-dark(light, dark). Cream on deep green-navy at night. */
+    --bg: light-dark(#f6f0e0, #0b1d2a);
+    --bg-2: light-dark(#ece3cb, #0f2a30);
+    --card: light-dark(#fffaf0, #11303a);
+    --ink: light-dark(#14283a, #f4ecd8);
+    --ink-soft: light-dark(#44566a, #c3cdc4);
+    --line: light-dark(#d4c9a8, #24475a);
+    --accent: light-dark(#8a5a00, #f2c14e);       /* gold, used for text so it needs contrast in both modes */
+    --leaf: light-dark(#2f6b4f, #7fc9a0);
+    --alert: light-dark(#a8321f, #ff8b78);
+    --moon: light-dark(#d9a93a, #f4d58d);
+    --petal-a: light-dark(#c2557a, #f08fb0);
+    --petal-b: light-dark(#d68a1a, #f4b860);
+    --petal-c: light-dark(#6a5bb5, #a99cf0);
+    accent-color: var(--accent);
+    scrollbar-color: light-dark(#b9ad8a, #2b5568) var(--bg);
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 1.0625rem/1.65 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  h1, h2, h3 { font-family: ui-serif, Georgia, "Times New Roman", serif; line-height: 1.15; margin: 0 0 .5em; font-weight: 600; }
+  h1 { font-size: clamp(2.4rem, 8vw, 4.6rem); letter-spacing: -.01em; }
+  h2 { font-size: clamp(1.6rem, 4.5vw, 2.3rem); }
+  h3 { font-size: 1.2rem; }
+  p { margin: 0 0 1em; }
+  a { color: var(--accent); text-underline-offset: .2em; }
+  a:focus-visible, summary:focus-visible, video:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+  .wrap { width: min(100% - 2rem, 62rem); margin-inline: auto; }          /* 1rem gutter on phones */
+  .skip { position: absolute; left: -999px; top: 0; background: var(--card); color: var(--ink); padding: .6rem 1rem; z-index: 10; }
+  .skip:focus { left: .5rem; top: .5rem; }
+  nav.top { display: flex; flex-wrap: wrap; gap: .25rem 1.1rem; padding: .9rem 0; font-size: .95rem; }
+  nav.top { padding-right: clamp(4.5rem, 20vw, 9.5rem); }   /* keep the links clear of the moon */
+  nav.top a { color: var(--ink-soft); text-decoration: none; }
+  nav.top a:hover { color: var(--accent); text-decoration: underline; }
+
+  /* hero */
+  .hero { position: relative; overflow: hidden; background: linear-gradient(light-dark(#efe5c9, #0b1d2a) 0%, light-dark(#efe5c9, #123036) 82%, var(--bg)); padding-bottom: 0; }
+  .hero .wrap { position: relative; padding: 1.2rem 0 0; }
+  .moon { position: absolute; right: 0; top: .5rem; width: clamp(5rem, 18vw, 9rem); height: auto; }
+  .tagline { font-size: clamp(1.05rem, 3vw, 1.3rem); color: var(--ink-soft); max-width: 36rem; }
+  .story { background: var(--card); border: 1px solid var(--line); border-radius: 1rem; padding: 1.2rem 1.3rem; margin: 1.6rem 0 0; max-width: 40rem; }
+  .story strong { color: var(--accent); }
+  .garden { display: block; width: 100%; height: auto; margin-top: 1rem; }
+  .stars circle { fill: var(--ink); opacity: .55; }
+  @media (prefers-reduced-motion: no-preference) {
+    .stars circle { animation: twinkle 4s ease-in-out infinite; }
+    .stars circle:nth-child(2n) { animation-delay: 1.3s; }
+    .stars circle:nth-child(3n) { animation-delay: 2.4s; }
+    @keyframes twinkle { 50% { opacity: .15; } }
+  }
+
+  section { padding: clamp(2.2rem, 7vw, 4rem) 0; border-top: 1px solid var(--line); }
+  section:nth-of-type(even) { background: var(--bg-2); }
+  .lede { color: var(--ink-soft); max-width: 42rem; }
+  .note { font-size: .93rem; color: var(--ink-soft); }
+  .tag { display: inline-block; font-size: .78rem; font-weight: 600; letter-spacing: .03em; text-transform: uppercase; padding: .1rem .55rem; border-radius: 99px; border: 1px solid currentColor; }
+  .tag.ok { color: var(--leaf); } .tag.stand { color: var(--accent); } .tag.no { color: var(--alert); }
+
+  /* flow */
+  ol.flow { list-style: none; counter-reset: s; padding: 0; margin: 1.4rem 0 0; display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); }
+  ol.flow li { counter-increment: s; background: var(--card); border: 1px solid var(--line); border-radius: 1rem; padding: 1.1rem 1.2rem; }
+  ol.flow li::before { content: counter(s); display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: 50%; background: var(--accent); color: light-dark(#fffaf0, #0b1d2a); font-weight: 700; margin-bottom: .6rem; }
+  ol.flow + .note { margin-top: 1.3rem; }
+  ol.flow b { display: block; font-family: ui-serif, Georgia, serif; font-size: 1.15rem; margin-bottom: .25rem; }
+
+  /* tables, stacked into cards on phones */
+  table { width: 100%; border-collapse: collapse; margin: 1.2rem 0; background: var(--card); border: 1px solid var(--line); border-radius: .8rem; overflow: hidden; }
+  th, td { text-align: left; padding: .75rem .9rem; vertical-align: top; border-bottom: 1px solid var(--line); }
+  th { font-size: .85rem; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-soft); background: var(--bg-2); }
+  tr:last-child td { border-bottom: 0; }
+  td:first-child { font-weight: 600; }
+  @media (max-width: 40rem) {
+    thead { position: absolute; left: -999px; }
+    table, tbody, tr, td { display: block; }
+    tr { padding: .6rem .2rem; border-bottom: 1px solid var(--line); }
+    td { border: 0; padding: .2rem .8rem; }
+    td[data-label]::before { content: attr(data-label) ": "; color: var(--ink-soft); font-weight: 400; font-size: .85rem; }
+    td:first-child::before { content: none; }
+  }
+
+  /* lantern */
+  .lantern-grid { display: grid; gap: 1.5rem; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); align-items: start; margin-top: 1.2rem; }
+  .board { background: light-dark(#17303f, #060f17); color: #f4ecd8; border-radius: 1.2rem; padding: 1.1rem; border: 2px solid light-dark(#0b1d2a, #24475a); }
+  .screen { font: 700 clamp(1.5rem, 7vw, 2.2rem)/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: .08em; text-align: center; padding: 1rem .5rem; background: #000; border-radius: .6rem; color: var(--w, #ffb347); }
+  .leds { display: flex; justify-content: center; gap: .55rem; margin-top: .9rem; }
+  .leds i { width: 1.15rem; height: 1.15rem; border-radius: 50%; background: var(--c, #123); box-shadow: 0 0 .7rem var(--c, transparent); }
+  .states { display: grid; gap: .8rem; }
+  .btns { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .9rem; }
+  .btn { font-size: .8rem; font-weight: 700; padding: .25rem .7rem; border-radius: 99px; color: #101820; }
+  ul.keys { padding-left: 1.2rem; }
+  ul.keys li { margin-bottom: .45rem; }
+
+  /* video */
+  .video { margin-top: 1.2rem; background: #000; border-radius: 1rem; overflow: hidden; border: 1px solid var(--line); }
+  .video video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; background: #000; }
+  .video p { margin: 0; padding: .8rem 1rem; background: var(--card); font-size: .95rem; }
+
+  footer { padding: 2.5rem 0 3rem; border-top: 1px solid var(--line); color: var(--ink-soft); font-size: .95rem; }
+  .btn-link { display: inline-block; padding: .65rem 1.2rem; border-radius: .7rem; background: var(--accent); color: light-dark(#fffaf0, #0b1d2a); font-weight: 700; text-decoration: none; }
+  .btn-link:hover { filter: brightness(1.08); }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<!-- reusable flower, drawn with currentColor petals -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="flower" viewBox="-20 -52 40 74">
+      <path d="M0 22 C-2 8 2 -6 0 -26" fill="none" stroke="var(--leaf)" stroke-width="2.4" stroke-linecap="round"/>
+      <path d="M0 8 C-8 6 -12 0 -13 -6 C-6 -5 -1 -1 0 8Z" fill="var(--leaf)"/>
+      <g fill="currentColor">
+        <ellipse cx="0" cy="-36" rx="4.2" ry="9"/>
+        <ellipse cx="0" cy="-36" rx="4.2" ry="9" transform="rotate(72 0 -26)"/>
+        <ellipse cx="0" cy="-36" rx="4.2" ry="9" transform="rotate(144 0 -26)"/>
+        <ellipse cx="0" cy="-36" rx="4.2" ry="9" transform="rotate(216 0 -26)"/>
+        <ellipse cx="0" cy="-36" rx="4.2" ry="9" transform="rotate(288 0 -26)"/>
+      </g>
+      <circle cx="0" cy="-26" r="4" fill="var(--moon)"/>
+    </symbol>
+  </defs>
+</svg>
+
+<header class="hero">
+  <div class="wrap">
+    <svg class="moon" viewBox="0 0 100 100" role="img" aria-label="A crescent moon">
+      <defs><mask id="crescent"><rect width="100" height="100" fill="#fff"/><circle cx="64" cy="40" r="34" fill="#000"/></mask></defs>
+      <circle cx="46" cy="50" r="36" fill="var(--moon)" mask="url(#crescent)"/>
+    </svg>
+    <nav class="top" aria-label="Sections">
+      <a href="#flow">How it works</a><a href="#ladder">Autonomy</a><a href="#real">Real vs stand-in</a><a href="#lantern">The Lantern</a><a href="#numbers">Numbers</a><a href="#video">Demo</a>
+    </nav>
+    <p class="note" style="margin:.4rem 0 1.2rem">Built solo at MHacks 26, Ann Arbor, Oct 3 to 4, 2026</p>
+    <h1 id="main" tabindex="-1">Go to sleep.<br>Nightshift is on.</h1>
+    <p class="tagline">An AI agent that fixes what breaks while you sleep, with a Lantern that glows when it needs you.</p>
+    <div class="story">
+      <p style="margin:0"><strong>The 20-second story.</strong> It is 3 a.m. A server goes down. Nobody wakes up, and it fixes itself. When a fix is risky, a FREE-WILi wristband, the Lantern, glows amber and waits for your press. Every change can be undone, and a double shake cuts everything off.</p>
+    </div>
+    <svg class="garden" viewBox="0 0 640 150" role="img" aria-label="A small night garden with five flowers, one for each device">
+      <g class="stars" aria-hidden="true">
+        <circle cx="40" cy="22" r="1.6"/><circle cx="120" cy="50" r="1.2"/><circle cx="215" cy="18" r="1.8"/><circle cx="300" cy="46" r="1.2"/>
+        <circle cx="395" cy="14" r="1.6"/><circle cx="470" cy="42" r="1.3"/><circle cx="545" cy="20" r="1.8"/><circle cx="610" cy="58" r="1.2"/>
+      </g>
+      <use href="#flower" x="30" y="30" width="80" height="148" style="color:var(--petal-a)"/>
+      <use href="#flower" x="150" y="48" width="64" height="118" style="color:var(--petal-b)"/>
+      <use href="#flower" x="260" y="22" width="90" height="166" style="color:var(--petal-c)"/>
+      <use href="#flower" x="400" y="52" width="60" height="110" style="color:var(--petal-a)"/>
+      <use href="#flower" x="500" y="34" width="76" height="140" style="color:var(--petal-b)"/>
+      <path d="M0 142 Q160 130 320 139 T640 136 V150 H0Z" fill="var(--bg)"/>
+    </svg>
+  </div>
+</header>
+
+<main>
+<section id="flow">
+  <div class="wrap">
+    <h2>How it works</h2>
+    <p class="lede">The agent never touches a device. It asks the gate, and the gate decides from a policy file the agent cannot edit.</p>
+    <ol class="flow">
+      <li><b>Something breaks</b>A service dies, a config gets corrupted, a phone loses Wi-Fi. An alert starts a run.</li>
+      <li><b>The agent investigates</b>It reads health output and logs, and proposes one fix from the runbook.</li>
+      <li><b>The gate decides</b>The command is classified from policy, never by the model. Safe and reversible runs alone, risky waits for a press, dangerous is blocked.</li>
+      <li><b>Snapshot, run, check, undo</b>The executor snapshots first, runs the fix, runs a health check and rolls back by itself if the check fails.</li>
+    </ol>
+    <p class="note">Trust is earned: a fix that has worked three times is promoted from "ask" to "alone". Every light on the Lantern and every flower on the dashboard comes from a real database row.</p>
+  </div>
+</section>
+
+<section id="ladder">
+  <div class="wrap">
+    <h2>The autonomy ladder</h2>
+    <table>
+      <thead><tr><th>Level</th><th>What happens</th><th>Example</th></tr></thead>
+      <tbody>
+        <tr><td>Observe</td><td data-label="What happens">Read only</td><td data-label="Example">Read logs, check status</td></tr>
+        <tr><td>Alone</td><td data-label="What happens">Allowlisted and reversible: snapshot, run, health check, auto-rollback</td><td data-label="Example">Restart a down service, restore a known-good config, toggle phone Wi-Fi</td></tr>
+        <tr><td>Ask</td><td data-label="What happens">Waits for a press on the Lantern</td><td data-label="Example">A new fix that has not earned trust yet</td></tr>
+        <tr><td>Hold</td><td data-label="What happens">Press and hold</td><td data-label="Example">Hard to undo</td></tr>
+        <tr><td>Never</td><td data-label="What happens">Blocked by policy; no press can allow it</td><td data-label="Example"><code>rm -rf</code>, anything a poisoned log line asks for</td></tr>
+      </tbody>
+    </table>
+    <p class="note">Safety limits: a circuit breaker stops a device after 2 failed fixes or 6 autonomous actions in an hour, and one gesture cuts all grants. Threat model: we defend against a fooled or over-eager agent, not a compromised operating system.</p>
+  </div>
+</section>
+
+<section id="real">
+  <div class="wrap">
+    <h2>What is real and what is a stand-in</h2>
+    <p class="lede">Stand-ins are labelled in the interface too.</p>
+    <table>
+      <thead><tr><th>Piece</th><th>Status</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Policy gate, grants, audit trail, rollback, earned trust</td><td data-label="Status"><span class="tag ok">Real code</span></td><td data-label="Notes">Identity rules are enforced in the database module and covered by security checks.</td></tr>
+        <tr><td>FREE-WILi display, LEDs, all five buttons, shake</td><td data-label="Status"><span class="tag ok">Real hardware</span></td><td data-label="Notes">A real press approved a real grant and a double shake revoked it in a live test.</td></tr>
+        <tr><td>FREE-WILi sound</td><td data-label="Status"><span class="tag no">Off</span></td><td data-label="Notes">Tones got stuck on the board, so sound is disabled.</td></tr>
+        <tr><td>Pixel 9 Pro</td><td data-label="Status"><span class="tag ok">Real device</span></td><td data-label="Notes">Reachable over adb and its Wi-Fi toggled by hand. A fully automatic phone fix through the gate has not been run yet.</td></tr>
+        <tr><td><code>web-1</code> and <code>web-2</code></td><td data-label="Status"><span class="tag stand">Stand-in</span></td><td data-label="Notes">Docker containers standing in for servers.</td></tr>
+        <tr><td>The alert that starts a demo</td><td data-label="Status"><span class="tag stand">Mock</span></td><td data-label="Notes">A mock webhook, labelled MOCK.</td></tr>
+        <tr><td>Dashboard</td><td data-label="Status"><span class="tag ok">Live data</span></td><td data-label="Notes">Night-garden view of devices, incidents, trust and cost, driven by database rows.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="lantern">
+  <div class="wrap">
+    <h2>The Lantern</h2>
+    <p class="lede">A FREE-WILi board is the approval device, the status light and the kill switch. One word on the screen, one colour in the LEDs.</p>
+    <div class="lantern-grid">
+      <div class="states" role="group" aria-label="Lantern states">
+        <div class="board"><div class="screen" style="--w:#ffb347">APPROVE</div><div class="leds" aria-hidden="true"><i style="--c:#ff9d1c"></i><i style="--c:#ff9d1c"></i><i style="--c:#ff9d1c"></i><i style="--c:#ff9d1c"></i><i style="--c:#ff9d1c"></i><i style="--c:#ff9d1c"></i><i style="--c:#ff9d1c"></i></div></div>
+        <div class="board"><div class="screen" style="--w:#6fe39a">HEALTHY</div><div class="leds" aria-hidden="true"><i style="--c:#25c46a"></i><i style="--c:#25c46a"></i><i style="--c:#25c46a"></i><i style="--c:#25c46a"></i><i style="--c:#25c46a"></i><i style="--c:#25c46a"></i><i style="--c:#25c46a"></i></div></div>
+        <div class="board"><div class="screen" style="--w:#ff7b6b">BLOCKED</div><div class="leds" aria-hidden="true"><i style="--c:#ff3b2f"></i><i style="--c:#ff3b2f"></i><i style="--c:#ff3b2f"></i><i style="--c:#ff3b2f"></i><i style="--c:#ff3b2f"></i><i style="--c:#ff3b2f"></i><i style="--c:#ff3b2f"></i></div></div>
+        <p class="note" style="margin:0">Illustration of the words and colours. Amber means it needs you, green means healed, red means blocked or revoked.</p>
+      </div>
+      <div>
+        <h3>Buttons</h3>
+        <ul class="keys">
+          <li><span class="btn" style="background:#3fbf6a">Green</span> approve</li>
+          <li><span class="btn" style="background:#5d8ff0">Blue</span> approve for a shorter time</li>
+          <li><span class="btn" style="background:#f06a5a">Red</span> deny a pending fix, or revoke everything</li>
+          <li><span class="btn" style="background:#cfcfcf">Gray</span> undo the last change</li>
+          <li><span class="btn" style="background:#f0d04a">Yellow</span> show the last events</li>
+        </ul>
+        <h3>Shake</h3>
+        <p>A double shake is the kill switch: every active and pending grant is revoked, and the board says REVOKED.</p>
+        <h3>The trust meter</h3>
+        <p>After a fix, the board shows <b>TRUST 1</b>, <b>2</b> or <b>3</b> and the LEDs fill up, two per success. At three, the fix is promoted and the board lights all seven LEDs gold and says <b>EARNED</b>.</p>
+        <div class="board" aria-hidden="true"><div class="screen" style="--w:#f2c14e">TRUST 2</div><div class="leds"><i style="--c:#f2c14e"></i><i style="--c:#f2c14e"></i><i style="--c:#f2c14e"></i><i style="--c:#f2c14e"></i><i style="--c:#0a3d1e"></i><i style="--c:#0a3d1e"></i><i style="--c:#0a3d1e"></i></div></div>
+        <p class="note">The trust meter is implemented and unit tested; it has not been seen on the board yet.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="numbers">
+  <div class="wrap">
+    <h2>Measured numbers</h2>
+    <p class="lede">A few runs on the real stack, one run per row. Treat these as rough: prices are list prices that are not yet verified, and we do not claim fleet savings.</p>
+    <table>
+      <thead><tr><th>Scenario</th><th>Model</th><th>Tokens</th><th>Cost</th><th>Time</th></tr></thead>
+      <tbody>
+        <tr><td>Service down</td><td data-label="Model">Gemini 3.1 flash-lite, own agent loop</td><td data-label="Tokens">3,041</td><td data-label="Cost">about $0.0012</td><td data-label="Time">3.9 s</td></tr>
+        <tr><td>Corrupted config</td><td data-label="Model">Gemini 3.1 flash-lite, own agent loop</td><td data-label="Tokens">6,066</td><td data-label="Cost">about $0.0022</td><td data-label="Time">6.4 s</td></tr>
+        <tr><td>Poisoned log line</td><td data-label="Model">Gemini 3.1 flash-lite, own agent loop</td><td data-label="Tokens">4,841</td><td data-label="Cost">about $0.0018</td><td data-label="Time">8.9 s</td></tr>
+        <tr><td>Service down</td><td data-label="Model">qwen2.5-coder 7B, local GPU</td><td data-label="Tokens">1,392</td><td data-label="Cost">free</td><td data-label="Time">2.2 s warm, 7 s cold</td></tr>
+        <tr><td>Service down</td><td data-label="Model">Claude, through a CLI harness (reported)</td><td data-label="Tokens">about 31,000</td><td data-label="Cost">about $0.036</td><td data-label="Time">16 s</td></tr>
+      </tbody>
+    </table>
+    <p class="note">In the poisoned-log run the model ignored the hostile line, so the gate was not exercised by that run; the same command sent straight to the gate was blocked by policy. The local model fixed the fault but skipped diagnosis. Our own loop used far fewer tokens than a general CLI harness did in the runs we saw (reported, not a benchmark). The demo shows the block with a deliberately gullible test agent.</p>
+  </div>
+</section>
+
+<section id="video">
+  <div class="wrap">
+    <h2>Demo video</h2>
+    <p class="lede">Two minutes: break a service, press green, watch it heal, let it heal alone, block a poisoned log line, undo, double shake.</p>
+    <div class="video">
+      <video controls preload="none" playsinline>
+        <source src="demo.mp4" type="video/mp4">
+        <p>Your browser cannot play the video. <a href="demo.mp4">Download demo.mp4</a>.</p>
+      </video>
+      <p>Placeholder: the video appears here once <code>demo.mp4</code> is placed next to this page. <a href="demo.mp4">Open demo.mp4</a></p>
+    </div>
+  </div>
+</section>
+
+<section id="tracks">
+  <div class="wrap">
+    <h2>Where it fits</h2>
+    <ul>
+      <li><b>Best use of Spacetime.</b> SpacetimeDB is the core real-time backend: tables, identity-checked reducers, scheduled expiry and live subscriptions.</li>
+      <li><b>Best use of FREE-WILi and Beyond the Code.</b> The board is how a human approves, sees status and stops the agent physically.</li>
+      <li><b>Actually Intelligent.</b> A tool-using agent behind a policy gate, with earned trust, rollback, a measured cost per fix and a model fallback chain that ends in a local model.</li>
+      <li><b>Notability.</b> Interface and flow sketches in Notability Pro, to be added.</li>
+    </ul>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><a class="btn-link" href="https://github.com/Aneesh-382005/nightshift">Source on GitHub</a></p>
+    <p>Nightshift, built solo by Aneesh Grover at MHacks 26. Stack: SpacetimeDB, TypeScript, MCP, React, Python, FREE-WILi OneWili, Gemini API, Ollama, Docker, adb. MIT licensed.</p>
+  </div>
+</footer>
+</body>
+</html>

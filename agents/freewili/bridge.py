@@ -321,7 +321,7 @@ class OneWiliBackend(Backend):
         self.connect_timeout = connect_timeout
         self.broken = False
         self._closing = False
-        self._led_ops: list[tuple] = []
+        self._led_state: dict[int, tuple] = {}        # led index -> (r, g, b, mode), replayed after a reconnect
         self._lock = threading.Lock()
         self._recovering = False
 
@@ -416,9 +416,8 @@ class OneWiliBackend(Backend):
             self._start_streams()
         if self._last_word:                           # redraw the current state
             self._ok(self.dev.gui.show_text(self._last_word), "show_text")
-        for leds, r, g, b, mode in self._led_ops:
-            for i in leds:
-                self._ok(self.dev.gui.set_led_color(i, r, g, b, 3000, self.modes[mode]), "set_led_color")
+        for i, (r, g, b, mode) in sorted(self._led_state.items()):
+            self._ok(self.dev.gui.set_led_color(i, r, g, b, 3000, self.modes[mode]), "set_led_color")
 
     # ---- device ops ----
     @guarded
@@ -435,8 +434,8 @@ class OneWiliBackend(Backend):
         # duration semantics are UNVERIFIED on hardware; the warden re-sends state every 2 s.
         for i in leds:
             self._ok(self.dev.gui.set_led_color(i, r, g, b, 3000, self.modes[mode]), "set_led_color")
-        op = (list(leds), r, g, b, mode)             # remembered for the redraw after a reconnect
-        self._led_ops = [op] if len(leds) >= NUM_LEDS else self._led_ops + [op]
+        for i in leds:                               # remembered for the redraw after a reconnect (bounded: 7 entries)
+            self._led_state[i] = (r, g, b, mode)
 
     @guarded
     def tone(self, hz, ms, amp) -> None:

@@ -59,6 +59,12 @@ export class Gateway {
     return undefined;
   }
 
+  // ---- explainable decisions: one gate.decision event per run_command (additive, no schema change)
+  private async decision(device: string, grantId: bigint, d: { class: string; rule: string; reason: string } & Record<string, unknown>) {
+    await this.conn.reducers.logEvent({ kind: 'gate.decision', device, grantId, detail: JSON.stringify(d).slice(0, 900) })
+      .catch(e => console.error('gate.decision log failed', e));
+  }
+
   // ---- grants
   // Serialised so the new grant id can be read back unambiguously.
   private async createGrant(a: {
@@ -99,7 +105,16 @@ export class Gateway {
       });
       await this.conn.reducers.gateDeny({ grantId: id, reason: v.reason });
       await this.conn.reducers.logEvent({ kind: 'policy.blocked', device: dev.id, grantId: id, detail: v.reason.slice(0, 200) });
+      await this.decision(dev.id, id, {
+        class: 'forbidden', rule: v.rule, capability: 'shell.destructive',
+        reason: `Blocked: ${v.reason.replace(/^matches forbidden pattern /, 'matches the forbidden pattern ')}. Nobody was asked.`,
+      });
       return { status: 'denied', grantId: Number(id), class: 'forbidden', reason: `blocked by policy: ${v.reason}` };
+    }
+
+    // Ask mode for a question (not a fix request): the agent may look, never change anything.
+    if (process.env.NS_GATE_READONLY === '1' && v.cls !== 'read') {
+      return { status: 'denied', class: v.cls, reason: 'this is a question, not a fix request: only read-only commands are allowed. Describe what you would do instead.' };
     }
 
     let command = a.command.trim();
@@ -109,6 +124,8 @@ export class Gateway {
     let escalated = false;
     let plan: Record<string, unknown> = { timeoutS: 30, deviceType };
     let grantReason = reason;
+    let tripped: string | undefined;
+    let trustSeen = { successes: 0, level: 2 };
 
     if (v.cls === 'read') plan = { timeoutS: 15, deviceType };
 
@@ -123,7 +140,8 @@ export class Gateway {
       };
       const trust = this.db.runbookTrust.runbookId.find(fix.id);
       const level = trust ? trust.level : 2;
-      const tripped = this.breaker(dev.id);
+      tripped = this.breaker(dev.id);
+      trustSeen = { successes: trust?.successes ?? 0, level };
       if (tripped) {
         escalated = true;
         grantReason = `ESCALATED (${tripped}): ${reason}`;
@@ -139,6 +157,23 @@ export class Gateway {
     });
     if (v.cls === 'autonomous' && autoApprove) {
       await this.conn.reducers.logEvent({ kind: 'fix.autonomous', device: dev.id, grantId, detail: String(plan.runbookId) });
+    }
+    const base = { rule: v.rule, capability };
+    if (v.cls === 'read') {
+      await this.decision(dev.id, grantId, { ...base, class: 'read', reason: 'Ran now: a read-only command, it changes nothing.' });
+    } else if (v.cls === 'autonomous' && autoApprove) {
+      await this.decision(dev.id, grantId, { ...base, class: 'autonomous', runbook: v.rule, successes: trustSeen.successes, needed: PROMOTE_AFTER,
+        reason: `Ran alone: ${v.rule} earned trust (${trustSeen.successes} of ${PROMOTE_AFTER} safe fixes).` });
+    } else if (v.cls === 'autonomous') {
+      await this.decision(dev.id, grantId, { ...base, class: 'ask', runbook: v.rule, successes: trustSeen.successes, needed: PROMOTE_AFTER, escalated: escalated || undefined,
+        reason: escalated
+          ? `Asked: autonomy is paused on ${dev.id} (${tripped}), a human has to decide.`
+          : `Asked: ${v.rule} has ${trustSeen.successes} of ${PROMOTE_AFTER} safe fixes so far, so it needs a press.` });
+    } else if (v.cls === 'write') {
+      await this.decision(dev.id, grantId, { ...base, class: 'ask', reason: 'Needs a press: it changes something and is not on the autonomous allowlist.' });
+    } else {
+      await this.decision(dev.id, grantId, { ...base, class: 'hold',
+        reason: v.rule === '' ? 'Needs press and hold: not on any allowlist, so it is treated as destructive.' : `Needs press and hold: ${v.reason}.` });
     }
     const out = await this.waitResult(grantId, WAIT_MS);
     out.class = v.cls;
@@ -167,7 +202,8 @@ export class Gateway {
       return { status: 'done', grantId: id, exitCode: r.exitCode, output: r.output, healthOk: r.healthOk, rolledBack: r.rolledBack };
     }
     if (settled === 'ended' && g) {
-      const why = g.status === 'expired' ? 'expired with no decision' : g.status === 'revoked' ? 'revoked' : g.decidedBy === 'gate' ? 'blocked by policy' : 'denied by the human';
+      const expiredByHub = [...this.db.event.iter()].some(e => e.kind === 'grant.denied' && e.grantId === grantId && e.detail.includes('expired: nobody approved'));
+      const why = expiredByHub ? 'expired: nobody approved in time, the incident is escalated to the human' : g.status === 'expired' ? 'expired with no decision' : g.status === 'revoked' ? 'revoked' : g.decidedBy === 'gate' ? 'blocked by policy' : 'denied by the human';
       return { status: 'denied', grantId: id, reason: why };
     }
     return { status: 'pending', grantId: id, reason: 'waiting for a human press or for the executor; call get_result later' };

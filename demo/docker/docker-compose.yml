@@ -3,11 +3,13 @@ services:
   web-1:
     build: .
     container_name: web-1
+    environment: { NS_NAME: web-1 }
     restart: unless-stopped
     ports: ["127.0.0.1:18081:8080"]
   web-2:
     build: .
     container_name: web-2
+    environment: { NS_NAME: web-2 }
     restart: unless-stopped
     ports: ["127.0.0.1:18082:8080"]
   # SANDBOX stand-in for "the laptop": only ~/nightshift-playground is mounted (rw), the known-good snapshot is read-only,

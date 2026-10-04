@@ -66,6 +66,7 @@ if want exec; then
   done
   devs="web-1,web-2,laptop"
   if adb devices 2>/dev/null | grep -qw device; then devs="$devs,pixel"; else echo "  WARNING: phone not listed by adb (unplugged or not authorized), starting executors without pixel" >&2; fi
+  if docker ps --format '{{.Names}}' | grep -qx ssh-box; then devs="$devs,ssh-box"; fi
   supervise exec "$ROOT/agents/exec" env NIGHTSHIFT_DEVICES="$devs" ./node_modules/.bin/tsx src/index.ts
 fi
 

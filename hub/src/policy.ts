@@ -29,6 +29,7 @@ export interface Policy {
 export interface Verdict {
   cls: Class;
   reason: string;
+  rule: string;        // the matched pattern source or fix id, '' when nothing matched
   fix?: Fix;
 }
 
@@ -79,22 +80,23 @@ export function loadPolicy(deviceType: string): Policy {
 export function classify(commandRaw: string, deviceType: string): Verdict {
   const command = commandRaw.trim();
   const p = loadPolicy(deviceType);
-  if (command.length === 0) return { cls: 'forbidden', reason: 'empty command' };
-  if (command.length > 2000) return { cls: 'forbidden', reason: 'command too long' };
-  for (const r of p.forbidden) if (r.test(command)) return { cls: 'forbidden', reason: `matches forbidden pattern ${r.source}` };
+  if (command.length === 0) return { cls: 'forbidden', reason: 'empty command', rule: '' };
+  if (command.length > 2000) return { cls: 'forbidden', reason: 'command too long', rule: '' };
+  for (const r of p.forbidden) if (r.test(command)) return { cls: 'forbidden', reason: `matches forbidden pattern ${r.source}`, rule: r.source };
   const meta = META.test(command);
   if (!meta) {
-    for (const f of p.autonomous) if (f.match.test(command)) return { cls: 'autonomous', reason: `allowlisted fix ${f.id}`, fix: f };
+    for (const f of p.autonomous) if (f.match.test(command)) return { cls: 'autonomous', reason: `allowlisted fix ${f.id}`, rule: f.id, fix: f };
   }
-  for (const r of p.destructive) if (r.test(command)) return { cls: 'destructive', reason: `matches destructive pattern ${r.source}` };
-  if (meta) return { cls: 'destructive', reason: 'shell metacharacters (chaining or redirection)' };
-  for (const r of p.read) if (r.test(command)) return { cls: 'read', reason: 'read pattern' };
-  for (const r of p.write) if (r.test(command)) return { cls: 'write', reason: 'write pattern' };
-  return { cls: 'destructive', reason: 'unclassified, default is press and hold' };
+  for (const r of p.destructive) if (r.test(command)) return { cls: 'destructive', reason: `matches destructive pattern ${r.source}`, rule: r.source };
+  if (meta) return { cls: 'destructive', reason: 'shell metacharacters (chaining or redirection)', rule: 'metacharacters' };
+  for (const r of p.read) if (r.test(command)) return { cls: 'read', reason: 'read pattern', rule: r.source };
+  for (const r of p.write) if (r.test(command)) return { cls: 'write', reason: 'write pattern', rule: r.source };
+  return { cls: 'destructive', reason: 'unclassified, default is press and hold', rule: '' };
 }
 
 export function deviceTypeFor(id: string, kind?: string): string {
   if (id === 'laptop') return 'laptop';
+  if (id.startsWith('ssh') || kind === 'ssh') return 'ssh-box';
   if (id.startsWith('vps') || kind === 'host') return 'host';
   if (id.startsWith('pixel') || kind === 'phone' || kind === 'android') return 'android';
   return 'linux-server';
