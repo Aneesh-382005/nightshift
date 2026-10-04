@@ -7,7 +7,7 @@ from freewili import FreeWili
 fw = FreeWili.find_first().expect("no FreeWili found")
 fw.open().expect("open failed")
 try:
-    print("show_text_display ->", fw.show_text_display("NIGHTSHIFT\nLeash online"))
+    print("show_text_display ->", fw.show_text_display("NIGHTSHIFT\nLantern online"))
     for i in range(7):
         fw.set_board_leds(i, 255, 140, 0).expect("led failed")      # idx, r, g, b (amber)
     print("leds amber")

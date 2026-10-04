@@ -4,7 +4,7 @@
 to bridge (stdin):   {"op":"text","text":"..."}  {"op":"led","r":0,"g":0,"b":0,"mode":"solid|pulse|blink","leds":[0..6]|"all"}
                      {"op":"tone","hz":880,"ms":200,"amp":0.3}  {"op":"clear"}
                      {"op":"press","name":"green"}   (sim backend only: inject a button press)
-from bridge (stdout): {"event":"ready"}  {"event":"button","name":"gray|yellow|green|blue|red"}  {"event":"error","message":"..."}
+from bridge (stdout): {"event":"shake"} (double shake, onewili only)  {"event":"ready"}  {"event":"button","name":"gray|yellow|green|blue|red"}  {"event":"error","message":"..."}
 
 Backends: --backend sim (default, stdlib only), legacy (`freewili` pip package, FW1 firmware),
 onewili (OneWili, stock OG firmware). Every device call runs on one worker thread with a timeout,
@@ -18,6 +18,8 @@ import argparse
 import json
 import os
 import queue
+import re
+import signal
 import sys
 import threading
 import time
@@ -45,6 +47,64 @@ def led_list(spec) -> list[int]:
     if spec in (None, "all"):
         return list(range(NUM_LEDS))
     return [int(i) for i in spec if 0 <= int(i) < NUM_LEDS]
+
+
+class ShakeDetector:
+    """Double shake = revoke all. Verified on the board: |accel| is about 1000 mg at rest, resting jitter peaks at
+    310 mg deviation, real shakes reach 900 to 2450 mg, frames arrive at about 18 Hz, gyro reads 0 (ignored).
+    One shake = |magnitude - 1000| above `threshold` for `frames` consecutive frames. Two shakes within `window`
+    seconds trigger, so a single bump never stops things. After a trigger it stays quiet for `cooldown` seconds."""
+
+    def __init__(self, threshold: float = 700.0, frames: int = 2, window: float = 1.5, cooldown: float = 3.0) -> None:
+        self.threshold, self.frames, self.window, self.cooldown = threshold, frames, window, cooldown
+        self.run = 0
+        self.armed = True            # a shake must settle (run back to 0) before the next one counts
+        self.shakes: list[float] = []
+        self.quiet_until = 0.0
+
+    def feed(self, ax: float, ay: float, az: float, t: float) -> bool:
+        dev = abs((ax * ax + ay * ay + az * az) ** 0.5 - 1000.0)
+        if dev <= self.threshold:
+            self.run = 0
+            self.armed = True
+            return False
+        self.run += 1
+        if self.run < self.frames or not self.armed:
+            return False
+        self.armed = False           # counted: this shake is one event however long it lasts
+        if t < self.quiet_until:
+            return False
+        self.shakes = [x for x in self.shakes if t - x <= self.window] + [t]
+        if len(self.shakes) >= 2:
+            self.shakes = []
+            self.quiet_until = t + self.cooldown
+            return True
+        return False
+
+
+class ButtonEdges:
+    """Turns '0 0 1 0 0' state frames (gray yellow green blue red) into rising-edge presses.
+    A held button fires once; the 1 Hz heartbeat repeats and a bounce within `debounce` seconds are ignored."""
+
+    def __init__(self, debounce: float = 0.05) -> None:
+        self.debounce = debounce
+        self.state = [0] * len(BUTTONS)
+        self.last_rise = [0.0] * len(BUTTONS)
+
+    def feed(self, response: str, t: float) -> list[str]:
+        try:
+            vals = [1 if int(x) else 0 for x in response.split()[:len(BUTTONS)]]
+        except ValueError:
+            return []
+        if len(vals) < len(BUTTONS):
+            return []
+        out = []
+        for i, v in enumerate(vals):
+            if v and not self.state[i] and t - self.last_rise[i] >= self.debounce:
+                out.append(BUTTONS[i])
+                self.last_rise[i] = t
+            self.state[i] = v
+        return out
 
 
 class Backend:
@@ -186,26 +246,117 @@ class LegacyBackend(Backend):
         return out
 
 
+class Reconnecting(Exception):
+    """The board is gone and the recovery thread is bringing it back. Callers drop the call quietly."""
+
+
+_IO_ERR = re.compile(r"errno (5|9|19)\b|input/output|write failed|read failed|no such device|device (disconnected|reports)"
+                     r"|port is closed|not open|broken pipe|device not configured|not responding", re.I)
+
+
+def guarded(fn):
+    """Device op wrapper: while the board is gone, drop the call; an I/O error marks the board gone."""
+    def wrapper(self, *a, **k):
+        if self.broken:
+            raise Reconnecting()
+        try:
+            return fn(self, *a, **k)
+        except Reconnecting:
+            raise
+        except Exception as e:  # noqa: BLE001
+            if isinstance(e, OSError) or _IO_ERR.search(str(e)):
+                self._mark_broken(str(e))
+            raise
+    return wrapper
+
+
+def call_with_timeout(fn, seconds: float):
+    """Run fn on a daemon thread. A hung USB call cannot block recovery; the thread is abandoned."""
+    box: list = []
+    done = threading.Event()
+
+    def run() -> None:
+        try:
+            box.append(("ok", fn()))
+        except BaseException as e:  # noqa: BLE001
+            box.append(("err", e))
+        done.set()
+
+    threading.Thread(target=run, daemon=True).start()
+    if not done.wait(seconds):
+        raise TimeoutError(f"timed out after {seconds}s")
+    kind, val = box[0]
+    if kind == "err":
+        raise val
+    return val
+
+
 class OneWiliBackend(Backend):
-    """OneWili on the stock OG firmware. read_buttons() is a latched bitmask and has ONE consumer: this poller."""
+    """OneWili on the stock OG firmware. read_buttons() fails on the board (verified), so buttons come from
+    the spontaneous '*button' stream (gui.stream_io), and the accelerometer from the '*motion' stream.
+    Both arrive on dev._transport.events, which this poller is the only consumer of.
+
+    Recovery: on an I/O error, or `silence_s` without frames, the board is marked gone, a recovery thread closes
+    the old handle, re-scans by USB id (onewili.connect() discovers the board, so ttyACM renumbering does not
+    matter), reconnects, restarts the streams and redraws the last word and LEDs. One log line per attempt,
+    backoff 0.5 s doubling to 3 s."""
     name = "onewili"
 
-    def __init__(self) -> None:
+    def __init__(self, stream: bool = True, shake: bool = True, shake_threshold: float = 700.0, lib=None,
+                 silence_s: float = 5.0, backoff: tuple[float, float] = (0.5, 3.0), connect_timeout: float = 10.0) -> None:
         self.dev = None
-        self.onewili = None
+        self.onewili = lib
         self.modes: dict = {}
         self._last_word = None
+        self.want_buttons = stream
+        self.want_shake = shake
+        self.shake_threshold = shake_threshold
+        self.edges = ButtonEdges()
+        self.shaker = ShakeDetector(shake_threshold)
+        self.streaming = False
+        self.retry_at = 0.0
+        self.last_frame = 0.0
+        self.silence_s = silence_s
+        self.backoff = backoff
+        self.connect_timeout = connect_timeout
+        self.broken = False
+        self._closing = False
+        self._led_ops: list[tuple] = []
+        self._lock = threading.Lock()
+        self._recovering = False
 
     def open(self) -> None:
-        import onewili
-        from onewili import enums
-        self.onewili = onewili
+        if self.onewili is None:
+            import onewili
+            self.onewili = onewili
+        enums = self.onewili.enums
         M = enums.owLEDManagerLEDMode
         self.modes = {"solid": M.SIMPLEVALUE, "pulse": M.PULSE, "blink": M.FLASH}
-        self.dev = onewili.connect()
+        self.dev = self.onewili.connect()
+        if self.want_buttons or self.want_shake:
+            self._start_streams()
+
+    def _start_streams(self) -> None:
+        if self.want_buttons:
+            self._ok(self.dev.gui.stream_io(20), "stream_io")             # '*button' frames on change, about 20 Hz
+        if self.want_shake:
+            self._ok(self.dev.io.sensors.enable_motion_stream(10), "enable_motion_stream")
+        self.streaming = True
+        self.last_frame = time.time()
+
+    def stop_streams(self) -> None:
+        """Best effort, never raises. Called on shutdown and after errors."""
+        self.streaming = False
+        for fn in (lambda: self.dev.gui.stream_io(0), lambda: self.dev.io.sensors.enable_motion_stream(0)):
+            try:
+                fn()
+            except Exception:
+                pass
 
     def close(self) -> None:
+        self._closing = True
         if self.dev:
+            self.stop_streams()
             try:
                 self.dev.close()
             except Exception:
@@ -216,6 +367,61 @@ class OneWiliBackend(Backend):
             raise RuntimeError(f"{what}: {res}")
         return res.ok_value if hasattr(res, "ok_value") else res
 
+    # ---- recovery ----
+    def _mark_broken(self, why: str) -> None:
+        with self._lock:
+            if self.broken:
+                return
+            self.broken = True
+            self.streaming = False
+            start = not self._recovering
+            self._recovering = True
+        log(f"[bridge] board lost ({why[:80]}); reconnecting")
+        emit({"event": "error", "message": "board disconnected, reconnecting"})
+        if start:
+            threading.Thread(target=self._recover_loop, daemon=True).start()
+
+    def _recover_loop(self) -> None:
+        delay = self.backoff[0]
+        attempt = 0
+        while not self._closing:
+            attempt += 1
+            try:
+                self._reconnect_once()
+            except Exception as e:  # noqa: BLE001
+                log(f"[bridge] reconnect attempt {attempt}: failed ({str(e)[:80]}), retry in {delay:g}s")
+                time.sleep(delay)
+                delay = min(self.backoff[1], delay * 2)
+                continue
+            log(f"[bridge] reconnect attempt {attempt}: ok")
+            with self._lock:
+                self.broken = False
+                self._recovering = False
+            emit({"event": "ready"})
+            return
+
+    def _reconnect_once(self) -> None:
+        old = self.dev                                # stays in place until the new handle is up
+        if old is not None:
+            try:
+                call_with_timeout(old.close, 2)       # may hang on a dead handle: abandon it
+            except Exception:
+                pass
+        if not self.onewili.find_devices():           # USB id scan, independent of ttyACM numbers
+            raise RuntimeError("board not found on USB")
+        self.dev = call_with_timeout(self.onewili.connect, self.connect_timeout)
+        self.edges = ButtonEdges()                    # drop any stale held state
+        self.shaker = ShakeDetector(self.shake_threshold)
+        if self.want_buttons or self.want_shake:
+            self._start_streams()
+        if self._last_word:                           # redraw the current state
+            self._ok(self.dev.gui.show_text(self._last_word), "show_text")
+        for leds, r, g, b, mode in self._led_ops:
+            for i in leds:
+                self._ok(self.dev.gui.set_led_color(i, r, g, b, 3000, self.modes[mode]), "set_led_color")
+
+    # ---- device ops ----
+    @guarded
     def text(self, text: str) -> None:
         # Verified on the board: the display shows only the first line, about 8 characters.
         word = (text.split("\n")[0].strip() or " ")[:8]
@@ -224,28 +430,60 @@ class OneWiliBackend(Backend):
         self._ok(self.dev.gui.show_text(word), "show_text")
         self._last_word = word
 
+    @guarded
     def led(self, leds, r, g, b, mode) -> None:
         # duration semantics are UNVERIFIED on hardware; the warden re-sends state every 2 s.
         for i in leds:
             self._ok(self.dev.gui.set_led_color(i, r, g, b, 3000, self.modes[mode]), "set_led_color")
+        op = (list(leds), r, g, b, mode)             # remembered for the redraw after a reconnect
+        self._led_ops = [op] if len(leds) >= NUM_LEDS else self._led_ops + [op]
 
+    @guarded
     def tone(self, hz, ms, amp) -> None:
-        # Verified workaround: a 200 ms tone once stuck on. Always 100 ms, then silence and stream off.
+        # Only reached with --sound on. Verified workaround: a 200 ms tone once stuck on. Always 100 ms, then silence.
         a = self.dev.io.audio
         self._ok(a.tone(float(hz), 100.0, 0.3), "tone")
         time.sleep(0.12)
         self._ok(a.tone(440.0, 50.0, 0.0), "tone off")
         self._ok(a.enable_audio_stream(0), "enable_audio_stream")
 
+    @guarded
     def clear(self) -> None:
         self._ok(self.dev.gui.clear_display(), "clear_display")
         self._last_word = None
 
+    @guarded
     def poll_buttons(self) -> list[str]:
-        mask = self._ok(self.dev.gui.panels.read_buttons(), "read_buttons")
-        if not isinstance(mask, int) or not mask:
+        if not (self.want_buttons or self.want_shake):
             return []
-        return [name for bit, name in enumerate(BUTTONS) if mask & (1 << bit)]
+        now = time.time()
+        out: list[str] = []
+        import queue as _q
+        ev = self.dev._transport.events
+        while True:
+            try:
+                f = ev.get_nowait()
+            except _q.Empty:
+                break
+            self.last_frame = now
+            path = getattr(f, "path", "")
+            if path == "*button" and self.want_buttons:
+                out += self.edges.feed(f.response, now)
+            elif path == "*motion" and self.want_shake:
+                try:
+                    ax, ay, az = (float(x) for x in f.response.split()[:3])
+                except ValueError:
+                    continue
+                if self.shaker.feed(ax, ay, az, now):
+                    log("[bridge] double shake")
+                    try:
+                        self.text("SHAKEN")          # immediate feedback; the warden follows with REVOKED
+                    except Exception:
+                        pass
+                    out.append("shake")
+        if now - self.last_frame > self.silence_s:  # the button stream heartbeats about once a second
+            raise RuntimeError("no stream frames for %gs: device not responding" % self.silence_s)
+        return out
 
 
 class Worker:
@@ -284,8 +522,12 @@ class Worker:
         return val
 
 
-def make_backend(name: str) -> Backend:
-    return {"sim": SimBackend, "legacy": LegacyBackend, "onewili": OneWiliBackend}[name]()
+def make_backend(args) -> Backend:
+    name = "sim" if args.sim else args.backend
+    if name == "onewili":
+        return OneWiliBackend(stream=args.buttons in ("auto", "stream"), shake=args.shake == "on",
+                              shake_threshold=args.shake_threshold)
+    return {"sim": SimBackend, "legacy": LegacyBackend}[name]()
 
 
 def main() -> int:
@@ -294,15 +536,17 @@ def main() -> int:
     ap.add_argument("--sim", action="store_true", help="alias for --backend sim")
     ap.add_argument("--timeout", type=float, default=3.0, help="per device call, seconds")
     ap.add_argument("--connect-timeout", type=float, default=10.0)
-    ap.add_argument("--buttons", choices=["auto", "device", "none"], default="auto",
-                    help="button source. auto = device, except onewili where device reads fail (verified): none, "
-                         "so presses come from the warden keyboard or phone page")
+    ap.add_argument("--buttons", choices=["auto", "device", "stream", "none"], default="auto",
+                    help="button source. auto = device polling for sim/legacy, the '*button' stream for onewili "
+                         "(read_buttons fails on the board, verified). none = presses come from the warden keyboard or phone page")
+    ap.add_argument("--shake", choices=["on", "off"], default="on", help="onewili: double shake sends a separate shake event (the warden revokes everything)")
+    ap.add_argument("--shake-threshold", type=float, default=700.0, help="single-shake threshold: |accel magnitude - 1000| in mg, 2 frames in a row")
     ap.add_argument("--sound", choices=["auto", "on", "off"], default="auto",
                     help="auto = off for onewili (tones got stuck on the real board), on for sim and legacy")
     ap.add_argument("--leds-brightness", type=float, default=1.0, help="scale LED rgb, 0.0 to 1.0")
-    ap.add_argument("--poll", type=float, default=0.1, help="button poll interval, seconds")
+    ap.add_argument("--poll", type=float, default=None, help="button poll interval, seconds (default 0.1, 0.02 for streams)")
     args = ap.parse_args()
-    backend = make_backend("sim" if args.sim else args.backend)
+    backend = make_backend(args)
     worker = Worker(args.timeout)
     sound = args.sound == "on" or (args.sound == "auto" and backend.name != "onewili")
     bright = max(0.0, min(1.0, args.leds_brightness))
@@ -329,13 +573,19 @@ def main() -> int:
         while not stop.is_set():
             try:
                 for name in worker.call(backend.poll_buttons):
-                    emit({"event": "button", "name": name})
+                    emit({"event": "shake"} if name == "shake" else {"event": "button", "name": name})
+            except Reconnecting:
+                pass                                     # board is being recovered, logged once by the backend
             except Exception as e:  # noqa: BLE001
                 report(e)
-            stop.wait(args.poll)
+            stop.wait(poll_s)
 
-    use_device_buttons = args.buttons == "device" or (args.buttons == "auto" and backend.name != "onewili")
-    if use_device_buttons:
+    poll_s = args.poll if args.poll is not None else (0.02 if backend.name == "onewili" else 0.1)
+    if backend.name == "onewili":
+        use_poller = args.buttons in ("auto", "stream") or args.shake == "on"
+    else:
+        use_poller = args.buttons in ("auto", "device")
+    if use_poller:
         threading.Thread(target=poller, daemon=True).start()
     else:
         log(f"[bridge] device buttons off ({backend.name}); presses come from the warden")
@@ -363,6 +613,13 @@ def main() -> int:
             keys()
             return 0
 
+    def shutdown() -> None:
+        try:
+            worker.call(backend.close, timeout=3)     # onewili: stream_io(0), motion stream off, close
+        except Exception:
+            pass
+
+    signal.signal(signal.SIGTERM, lambda *_: (shutdown(), os._exit(0)))
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -387,13 +644,12 @@ def main() -> int:
                     backend.pressed.put(name)
             else:
                 emit({"event": "error", "message": f"unknown op: {op}"})
+        except Reconnecting:
+            pass
         except Exception as e:  # noqa: BLE001
             report(e)
     stop.set()
-    try:
-        backend.close()
-    except Exception:
-        pass
+    shutdown()
     return 0
 
 

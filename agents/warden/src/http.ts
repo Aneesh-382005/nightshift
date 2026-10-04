@@ -1,4 +1,4 @@
-// Optional phone-browser Leash: a tiny page with the five buttons and the current screen.
+// Optional phone-browser Lantern: a tiny page with the five buttons and the current screen.
 // Off unless --http-port is given. Every request needs the token (printed at startup), so open the
 // printed URL on the phone. Plain HTTP: use it on the local network or phone hotspot only.
 import http from 'node:http';
@@ -18,7 +18,7 @@ export function startHttp(opts: {
     const a = Buffer.from(given ?? ''), b = Buffer.from(opts.token);
     return a.length === b.length && crypto.timingSafeEqual(a, b);
   };
-  const page = `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>Nightshift Leash</title>
+  const page = `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>Nightshift Lantern</title>
 <style>body{font-family:system-ui;margin:0;padding:16px;background:#111;color:#eee}#s{border-radius:12px;padding:16px;margin-bottom:16px;background:#222;min-height:120px;border-left:12px solid #333}
 #s b{font-size:28px;display:block;margin-bottom:8px}button{display:block;width:100%;padding:20px;margin:10px 0;border:0;border-radius:12px;color:#fff;font-size:20px}</style>
 <div id=s></div>${NAMES.map(n => `<button style="background:${COLORS[n]}" data-n=${n}>${LABELS[n]}</button>`).join('')}

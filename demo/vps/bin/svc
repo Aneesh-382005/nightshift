@@ -1,0 +1,14 @@
+#!/bin/sh
+# Narrow service wrapper for the executor. The only thing it can touch is the demo unit (alias "web").
+# usage: svc status|start|stop|restart web        (systemctl --user, no sudo)
+unit=${NS_UNIT:-ns-demo}
+[ "$2" = web ] || { echo "svc: only 'web' is allowed" >&2; exit 2; }
+H=$(dirname "$0")/health
+waitup() { i=0; while [ $i -lt 20 ]; do "$H" && return 0; sleep 0.5; i=$((i+1)); done; return 1; }
+case "$1" in
+  status)  systemctl --user is-active --quiet "$unit" && echo running || { echo stopped; exit 3; } ;;
+  start)   systemctl --user start "$unit" && waitup ;;
+  restart) systemctl --user restart "$unit" && waitup ;;
+  stop)    systemctl --user stop "$unit" ;;
+  *) echo "usage: svc status|start|stop|restart web" >&2; exit 2 ;;
+esac

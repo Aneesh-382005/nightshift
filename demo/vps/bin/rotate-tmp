@@ -1,0 +1,7 @@
+#!/bin/sh
+# Rotate (never delete) $NS_ROOT/tmp. "rotate-tmp undo" moves the last rotation back.
+cd "${NS_ROOT:-$HOME/ns-demo}" || exit 1
+case "$1" in
+  undo) d=$(cat .rotate.last) && mv "$d"/* tmp/ ;;
+  *) d=tmp.rotated.$(date +%s); mv tmp "$d" && mkdir tmp && echo "$d" > .rotate.last ;;
+esac

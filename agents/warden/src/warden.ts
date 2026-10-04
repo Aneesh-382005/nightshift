@@ -20,7 +20,7 @@ function arg(name: string, def: string): string {
 const URI = arg('uri', 'ws://127.0.0.1:3000');
 const DB = arg('db', 'nightshift');
 const BACKEND = arg('backend', 'sim') as Backend;
-const BRIDGE_ARGS = ['sound', 'leds-brightness'].flatMap(k => (process.argv.includes(`--${k}`) ? [`--${k}`, arg(k, '')] : []));
+const BRIDGE_ARGS = ['sound', 'leds-brightness', 'buttons', 'shake', 'shake-threshold'].flatMap(k => (process.argv.includes(`--${k}`) ? [`--${k}`, arg(k, '')] : []));
 const HTTP_PORT = Number(arg('http-port', '0'));   // 0 = phone page off
 const HTTP_HOST = arg('http-host', '127.0.0.1');  // use 0.0.0.0 for a phone on the same network
 
@@ -90,7 +90,7 @@ function lastEvents(n: number) {
   return es.slice(0, n);
 }
 
-/** Pure render: what the Leash shows right now. Priority: pending > overlay > active > idle. */
+/** Pure render: what the Lantern shows right now. Priority: pending > overlay > active > idle. */
 function computeView(): View {
   const now = nowUs();
   const pend = pendingGrants();
@@ -263,7 +263,18 @@ function onButton(name: ButtonName) {
   render();
 }
 
-// ---------- keyboard (always on: the sim input, and a fallback if the Leash is unplugged) ----------
+/** Double shake = the kill switch: revoke every active and pending grant (distinct from red, which denies a pending grant). */
+function onShake() {
+  if (!applied) return;
+  console.log('[warden] double shake: revoke all');
+  armed = undefined;
+  show(['REVOKED', 'double shake'], RED, 'solid', 3000);
+  tone(180, 400);
+  void call('revoke all', conn.reducers.revokeAll({}));
+  render();
+}
+
+// ---------- keyboard (always on: the sim input, and a fallback if the Lantern is unplugged) ----------
 const KEYS: Record<string, ButtonName> = {
   g: 'green', b: 'blue', r: 'red', w: 'gray', y: 'yellow',
   '1': 'gray', '2': 'yellow', '3': 'green', '4': 'blue', '5': 'red',
@@ -274,6 +285,7 @@ function setupKeys() {
   process.stdin.on('data', (s: string) => {
     for (const ch of s) {
       if (ch === '\x03' || ch === 'q') shutdown(0);
+      if (ch === 'x') { onShake(); continue; }   // simulated double shake
       const b = KEYS[ch];
       if (b) onButton(b);
     }
@@ -290,12 +302,13 @@ async function startBridge() {
     console.error(`[warden] bridge ${BACKEND} failed: ${(e as Error).message}`);
     bridge.kill();
     if (BACKEND !== 'sim') {
-      console.error('[warden] falling back to sim bridge. The keyboard is the Leash now.');
+      console.error('[warden] falling back to sim bridge. The keyboard is the Lantern now.');
       bridge = new Bridge('sim', BRIDGE_ARGS);
       await bridge.start();
     }
   }
   bridge.on('button', onButton);
+  bridge.on('shake', onShake);
   bridge.on('exit', () => console.error('[warden] bridge exited, console only'));
 }
 
@@ -353,5 +366,5 @@ if (HTTP_PORT > 0) {
     state: () => { const v = computeView(); return { lines: v.lines, led: v.led, mode: v.mode }; },
     press: onButton,
   });
-  console.log(`[warden] phone Leash: http://<this-laptop-ip>:${HTTP_PORT}/?t=${token}  (bound to ${HTTP_HOST})`);
+  console.log(`[warden] phone Lantern: http://<this-laptop-ip>:${HTTP_PORT}/?t=${token}  (bound to ${HTTP_HOST})`);
 }

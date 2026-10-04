@@ -1,0 +1,75 @@
+# Policy for host devices (a remote machine such as a VPS, ids like vps-1). The executor runs ON the machine as a
+# limited user: no sudo, no inbound ports. Commands run under `sh -c` with cwd = the demo root, so every path
+# is RELATIVE to that root. Service control only through the narrow wrapper `svc ... web`.
+deviceType: host
+
+forbidden:
+  - '\b(sudo|su|doas)\b'
+  - '(^|[\s=:"'']|>)/'            # any absolute path (outside the root by definition)
+  - '(^|\s)~'
+  - '\.\.'
+  - '\b(curl|wget|nc|ncat|netcat|ssh|scp|sftp|ftp|telnet|rsync)\b'
+  - '\brm\b'
+  - '\bsystemctl\b|\bjournalctl\b|\bservice\s'
+  - '\bsvc\s+(status|start|stop|restart)\s+(?!web\b)\S+'
+  - '\bsvc\s+(?!status\b|start\b|stop\b|restart\b)\S+'
+  - '\b(mkfs|dd|shutdown|reboot|poweroff|halt|passwd|useradd|userdel)\b'
+  - '\bchmod\s+(-\S+\s+)*[0-7]*777\b'
+
+read:
+  - '^health$'
+  - '^svc status web$'
+  - '^tail -n 20 log/app/app\.log$'
+  - '^df -P \.$'
+  - '^du -sk tmp$'
+  - '^ls srv$'
+
+# The four documented fixes. Snapshots are taken first, health is checked, a failing health rolls back.
+# An empty inverse means the executor synthesizes the undo from the snapshots (dirs are moved aside, never deleted).
+autonomous:
+  - id: restart-web
+    match: '^(svc restart web|restart-web|restart web( service)?)$'
+    capability: shell.write
+    command: 'svc restart web'
+    snapshots:
+      - { kind: service, name: web }
+    inverse: ''
+    health: 'health'
+    risk: low
+    timeoutS: 30
+  - id: restore-config
+    match: '^(restore-config|restore config|cp srv/app\.conf\.good etc/app\.conf)$'
+    capability: shell.write
+    command: 'cp srv/app.conf.good etc/app.conf'
+    snapshots:
+      - { kind: file, path: etc/app.conf }
+    inverse: ''
+    health: 'health'
+    risk: low
+    timeoutS: 30
+  - id: rotate-tmp
+    match: '^(rotate-tmp|rotate tmp)$'
+    capability: shell.write
+    command: 'rotate-tmp'
+    snapshots: []
+    inverse: 'rotate-tmp undo'
+    health: 'health'
+    risk: low
+    timeoutS: 30
+  - id: restore-folder
+    match: '^(restore-folder|restore folder|cp -a srv/app\.snapshot srv/app)$'
+    capability: shell.write
+    command: 'cp -a srv/app.snapshot srv/app'
+    snapshots:
+      - { kind: dir, path: srv/app }
+    inverse: ''
+    health: 'test -d srv/app && (cd srv && sha256sum -c --quiet app.manifest) && health'
+    risk: low
+    timeoutS: 30
+
+write:
+  - '^svc (start|stop) web$'
+
+destructive:
+  - '\b(truncate|shred|unlink)\b'
+  - '\b(chown|chmod)\s+-R\b'

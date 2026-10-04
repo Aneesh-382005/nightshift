@@ -1,5 +1,5 @@
 """Tiny demo web service. /health is 200 only when the config parses and the log dir is not full."""
-import os, re, sys, time
+import hashlib, os, re, sys, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 CONF = "/etc/app.conf"
@@ -15,6 +15,16 @@ def check():
             return 500, "bad config"
     except Exception as e:
         return 500, f"bad config: {e}"
+    if not os.path.isdir("/srv/app"):
+        return 500, "app dir missing"
+    try:
+        for line in open("/srv/app.manifest"):
+            h, f = line.split(None, 1)
+            f = os.path.join("/srv", f.strip())
+            if not os.path.isfile(f) or hashlib.sha256(open(f, "rb").read()).hexdigest() != h:
+                return 500, "app files changed: " + os.path.relpath(f, "/srv")
+    except Exception as e:
+        return 500, f"app manifest: {e}"
     try:
         used = sum(os.path.getsize(os.path.join(LOGDIR, n)) for n in os.listdir(LOGDIR))
     except FileNotFoundError:

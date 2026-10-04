@@ -5,6 +5,7 @@ import type { AccessGrant } from '../../common/src/module_bindings/types.js';
 import { inverseFrom, takeAll, verifyRestored, type Snap, type SnapStep } from './snapshot.js';
 import type { Target } from './targets.js';
 import { STATE_DIR } from './spacetime.js';
+import { Monitor } from './monitor.js';
 import { clip, sleep } from './util.js';
 
 interface Plan {
@@ -33,6 +34,8 @@ export class DeviceExecutor {
   private ledger = new Map<string, LedgerEntry>();   // change id -> entry
   private ledgerFile: string;
   private timer?: NodeJS.Timeout;
+  private active = 0;
+  monitor?: Monitor;
 
   constructor(readonly target: Target, readonly conn: DbConnection, private caps = CAPS) {
     this.ledgerFile = path.join(STATE_DIR, `${target.id}.ledger.json`);
@@ -48,7 +51,8 @@ export class DeviceExecutor {
     fs.writeFileSync(this.ledgerFile, JSON.stringify(Object.fromEntries(this.ledger)));
   }
   private enqueue(job: () => Promise<void>) {
-    this.chain = this.chain.then(job).catch(e => this.log(`job error: ${e?.stack ?? e}`));
+    this.active++;
+    this.chain = this.chain.then(job).catch(e => this.log(`job error: ${e?.stack ?? e}`)).finally(() => { this.active--; });
   }
 
   async start() {
@@ -67,6 +71,7 @@ export class DeviceExecutor {
           tables.runResult.where(r => r.device.eq(t.id)),
           tables.change.where(r => r.device.eq(t.id)),
           tables.event.where(r => r.device.eq(t.id)),
+          tables.incident.where(r => r.device.eq(t.id)),
         ]);
     });
 
@@ -80,10 +85,18 @@ export class DeviceExecutor {
     });
     this.ready = true;
     for (const g of this.conn.db.accessGrant.iter()) this.consider(g);   // grants approved while we were down
+    if (process.env.NIGHTSHIFT_MONITOR !== '0') {
+      this.monitor = new Monitor(t, this.conn, {
+        busy: () => this.active > 0,
+        incidentOpen: () => { for (const i of this.conn.db.incident.iter()) if (i.device === t.id && i.status === 'open') return true; return false; },
+        alertUrl: process.env.NIGHTSHIFT_ALERT_URL ?? 'http://127.0.0.1:8787/alert',
+      });
+      this.monitor.start();
+    }
     this.log(`online (${t.name})`);
   }
 
-  stop() { if (this.timer) clearInterval(this.timer); }
+  stop() { if (this.timer) clearInterval(this.timer); this.monitor?.stop(); }
 
   private consider(g: AccessGrant) {
     if (!this.ready || g.target !== this.target.id || g.status !== 'active' || !CAPS.includes(g.capability)) return;

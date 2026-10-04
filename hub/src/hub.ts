@@ -14,6 +14,8 @@ export const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 export const nowUs = () => BigInt(Date.now()) * 1000n;
 
 export type Conn = DbConnection;
+let quitting = false;
+export const markQuitting = () => { quitting = true; };
 
 export async function connectGate(): Promise<Conn> {
   let saved: string | undefined;
@@ -31,6 +33,7 @@ export async function connectGate(): Promise<Conn> {
         clearTimeout(timer);
         resolveConn(c);
       })
+      .onDisconnect(() => { if (!quitting) { console.error('[hub] SpacetimeDB connection lost, exiting so the supervisor restarts me'); process.exit(1); } })
       .onConnectError((_c, err) => { clearTimeout(timer); reject(new Error(`connect error: ${err}`)); })
       .build();
   });

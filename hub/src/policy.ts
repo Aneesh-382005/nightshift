@@ -94,6 +94,8 @@ export function classify(commandRaw: string, deviceType: string): Verdict {
 }
 
 export function deviceTypeFor(id: string, kind?: string): string {
+  if (id === 'laptop') return 'laptop';
+  if (id.startsWith('vps') || kind === 'host') return 'host';
   if (id.startsWith('pixel') || kind === 'phone' || kind === 'android') return 'android';
   return 'linux-server';
 }

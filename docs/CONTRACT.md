@@ -78,7 +78,7 @@ Undo button: warden calls requestRollback(changeId); the target's executor watch
 Cost event: logEvent kind cost.update, detail = JSON {"tokens":int,"usd":number,"seconds":number,"commands":int,"presses":int,"model":string}.
 Warden bridge protocol (JSON lines over stdio between agents/warden Node and agents/freewili/bridge.py):
  to bridge: {"op":"text","text":"..."} {"op":"led","r":0-255,"g":0,"b":0,"mode":"solid|pulse|blink","leds":[0..6]|"all"} {"op":"tone","hz":880,"ms":200,"amp":0.3} {"op":"clear"}
- from bridge: {"event":"button","name":"gray|yellow|green|blue|red"} {"event":"ready"} {"event":"error","message":"..."}
-Button map: green approve 120s, blue approve 30s, red deny pending or revoke all, gray undo last applied change, yellow show last 5 audit lines. Shake revokes all (stretch). Bridge needs a --sim mode (keys g b r w y) because FREE-WILi connect() is being debugged by the lead.
+ from bridge: {"event":"button","name":"gray|yellow|green|blue|red"} {"event":"shake"} (double shake: warden calls revokeAll) {"event":"ready"} {"event":"error","message":"..."}
+Button map: green approve 120s, blue approve 30s, red deny pending or revoke all, gray undo last applied change, yellow show last 5 audit lines. Double shake revokes all (verified detection on the real board; bridge emits its own shake event). Real buttons come from the board's stream_io(20) button events; the bridge also has a --sim mode (keys g b r w y x for shake).
 Gateway ports: mock alert webhook POST http://127.0.0.1:8787/alert {"device":"web-1","alert":"service down"}.
 Device ids: docker targets `web-1`, `web-2`; phone `pixel`; the gate and warden are not devices.

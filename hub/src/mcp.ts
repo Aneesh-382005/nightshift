@@ -25,11 +25,11 @@ const server = new McpServer({ name: 'nightshift', version: '0.1.0' });
 server.registerTool(
   'run_command',
   {
-    description: 'Run a shell command on a managed device through the Nightshift gate. The gate classifies it from policy: read runs now, named fixes (restart-web, rotate-logs, restore-config, wifi-enable, wifi-bounce) may need a human press the first times, destructive needs press and hold, forbidden is refused. Returns done with exitCode and output, or pending (call get_result), or denied.',
+    description: 'Run a command on a device through the gate. Named fixes: restart-web, rotate-logs, restore-config, wifi-enable, wifi-bounce. Returns done, pending (use get_result) or denied.',
     inputSchema: {
-      device: z.string().describe('device id, see list_devices (e.g. web-1, web-2, pixel)'),
-      command: z.string().describe('shell command, or a named fix such as restart-web'),
-      reason: z.string().describe('why, shown to the human on the Lantern'),
+      device: z.string().describe('web-1, web-2 or pixel'),
+      command: z.string().describe('command or named fix'),
+      reason: z.string().describe('why, shown on the Lantern'),
     },
   },
   async ({ device, command, reason }) => {
@@ -43,7 +43,7 @@ server.registerTool(
 server.registerTool(
   'get_result',
   {
-    description: 'Check a grant returned as pending by run_command. Waits up to about 45 seconds.',
+    description: 'Check a pending grant. Waits up to 45s.',
     inputSchema: { grantId: z.number().int().describe('grantId from run_command') },
   },
   async ({ grantId }) => {
@@ -56,9 +56,17 @@ server.registerTool(
 
 server.registerTool(
   'list_devices',
-  { description: 'List managed devices with kind, capabilities and online status.', inputSchema: {} },
-  async () => text(gw.listDevices()),
+  { description: 'List managed devices and whether they are online.', inputSchema: { filter: z.string().optional().describe('optional text to filter by id') } },
+  async (args: { filter?: string }) => {
+    console.error('list_devices args', JSON.stringify(args));
+    const f = args?.filter?.toLowerCase();
+    return text(gw.listDevices().filter(d => d.id !== 'test-box' && d.id !== 'demo-box' && (!f || d.id.includes(f))));
+  },
 );
 
 await server.connect(new StdioServerTransport());
+// The harness closing our stdin is the shutdown signal. Without this the open DB connection keeps the process alive forever.
+process.stdin.on('end', () => process.exit(0));
+process.stdin.on('close', () => process.exit(0));
+for (const sig of ['SIGTERM', 'SIGINT'] as const) process.on(sig, () => process.exit(0));
 console.error('nightshift MCP ready');

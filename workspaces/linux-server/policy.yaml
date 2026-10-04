@@ -68,6 +68,17 @@ autonomous:
     risk: low
     timeoutS: 30
 
+  - id: restore-app-dir
+    match: '^(restore-app-dir|restore app dir|restore folder|cp -a /srv/app\.snapshot /srv/app)$'
+    capability: shell.write
+    command: 'cp -a /srv/app.snapshot /srv/app'
+    snapshots:
+      - { kind: dir, path: /srv/app }
+    inverse: ''
+    health: 'test -d /srv/app && cd /srv && sha256sum -c --quiet /srv/app.manifest && health'
+    risk: low
+    timeoutS: 30
+
 # Needs a physical press. Reversible changes only where an inverse is stated by an autonomous fix.
 write:
   - '^(systemctl|service)\s+(restart|start|stop)\s+\S+$'

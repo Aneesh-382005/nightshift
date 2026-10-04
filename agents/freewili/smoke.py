@@ -7,7 +7,7 @@ print("LED modes:", [m for m in dir(enums.owLEDManagerLEDMode) if not m.startswi
 
 dev = onewili.connect()
 try:
-    print("show_text      ->", dev.gui.show_text("NIGHTSHIFT\nLeash online"))
+    print("show_text      ->", dev.gui.show_text("NIGHTSHIFT\nLantern online"))
     mode = list(enums.owLEDManagerLEDMode)[0]
     for i in range(7):
         r = dev.gui.set_led_color(i, 255, 140, 0, 3000, mode)

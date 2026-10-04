@@ -1,11 +1,12 @@
 // Hand-drawn night garden pieces. Inline SVG only, all state comes from props.
-export type FlowerState = 'bloom' | 'wilted' | 'asking' | 'blocked'
+export type FlowerState = 'bloom' | 'wilted' | 'asking' | 'blocked' | 'healing'
 
 export const FLOWER_LABEL: Record<FlowerState, string> = {
   bloom: 'In bloom',
   wilted: 'Wilted',
   asking: 'Needs your OK',
   blocked: 'Blocked',
+  healing: 'Healing...',
 }
 
 const PETALS = ['var(--blush)', 'var(--lavender)', 'var(--cream)', 'var(--lantern)']
@@ -43,6 +44,13 @@ export function Flower({ id, state }: { id: string; state: FlowerState }) {
       {state === 'blocked' && (
         <g fill="var(--red)">
           <path d="M49 100 l-8 -3 l8 -3z" /><path d="M51 88 l8 -3 l-8 -3z" /><path d="M49 76 l-8 -3 l8 -3z" /><path d="M51 66 l8 -3 l-8 -3z" />
+        </g>
+      )}
+      {state === 'healing' && (
+        <g className="sprout" transform="translate(50 60)">
+          <path d="M0 -4 C-14 -4 -22 -14 -22 -24 C-8 -24 0 -16 0 -4Z" fill="var(--green)" />
+          <path d="M0 -4 C14 -4 22 -14 22 -24 C8 -24 0 -16 0 -4Z" fill="var(--green)" opacity=".85" />
+          <circle cx="0" cy="-30" r="7" fill="var(--blush)" />
         </g>
       )}
       {(state === 'bloom' || state === 'wilted') && (

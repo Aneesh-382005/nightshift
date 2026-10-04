@@ -12,3 +12,8 @@ demo/*.mp4
 *.bak
 err.txt
 *.out
+.logs/
+.stdb-*
+.state/
+*.tmp.mp4
+ui/public/recap/*.mp4

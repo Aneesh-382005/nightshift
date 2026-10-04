@@ -34,6 +34,7 @@ export class Bridge extends EventEmitter {
         try { m = JSON.parse(line); } catch { return; }
         if (m.event === 'ready') { this.ready = true; clearTimeout(timer); resolve(); }
         else if (m.event === 'button') this.emit('button', m.name as ButtonName);
+        else if (m.event === 'shake') this.emit('shake');
         else if (m.event === 'error') {
           console.error(`[bridge] error: ${m.message}`);
           if (!this.ready) { clearTimeout(timer); this.failed = true; reject(new Error(m.message)); }

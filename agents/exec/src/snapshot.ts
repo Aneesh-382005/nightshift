@@ -4,11 +4,13 @@ import { shq, sleep } from './util.js';
 export type SnapStep =
   | { kind: 'file'; path: string }
   | { kind: 'service'; name: string }
+  | { kind: 'dir'; path: string }
   | { kind: 'android_setting'; ns: string; key: string };
 
 export type Snap =
   | { kind: 'file'; path: string; exists: boolean; mode: string; b64: string }
   | { kind: 'service'; name: string; active: boolean }
+  | { kind: 'dir'; path: string; exists: boolean; hash: string }   // hash of all file checksums
   | { kind: 'android_setting'; ns: string; key: string; value: string | null };   // null means absent
 
 const MAX_FILE = 64 * 1024;
@@ -30,6 +32,12 @@ export async function takeSnapshot(t: Target, step: SnapStep): Promise<Snap> {
     if (size > MAX_FILE) throw new Error(`${step.path} is ${size} bytes, over the ${MAX_FILE} byte snapshot limit`);
     const b64 = out.split(/^DATA\s*$/m)[1]?.replace(/\s+/g, '') ?? '';
     return { kind: 'file', path: step.path, exists: true, mode, b64 };
+  }
+  if (step.kind === 'dir') {
+    const p = shq(step.path);
+    const out = await must(t, `if [ -d ${p} ]; then echo EXISTS; (cd ${p} && find . -type f | sort | xargs -r sha256sum | sha256sum | cut -d' ' -f1); else echo ABSENT; fi`);
+    const exists = out.startsWith('EXISTS');
+    return { kind: 'dir', path: step.path, exists, hash: exists ? (out.split('\n')[1] ?? '').trim() : '' };
   }
   if (step.kind === 'service') {
     const n = shq(step.name);
@@ -54,6 +62,9 @@ export function inverseFrom(snaps: Snap[]): string {
       parts.push(s.exists
         ? `printf %s ${shq(s.b64)} | base64 -d > ${shq(s.path)} && chmod ${s.mode} ${shq(s.path)}`
         : `rm -f ${shq(s.path)}`);
+    } else if (s.kind === 'dir') {
+      // Only "was absent" is invertible, and never by deleting: move the restored folder aside.
+      if (!s.exists) parts.push(`mv ${shq(s.path)} ${shq(`${s.path}.undone.${Date.now()}`)}`);
     } else if (s.kind === 'service') {
       const n = shq(s.name), act = s.active ? 'start' : 'stop';
       parts.push(`if command -v svc >/dev/null 2>&1; then svc ${act} ${n}; else systemctl ${act} ${n}; fi`);
@@ -75,7 +86,7 @@ export async function verifyRestored(t: Target, before: Snap[]): Promise<string 
     if (i) await sleep(1000);
     last = '';
     for (const b of before) {
-      const now = await takeSnapshot(t, b.kind === 'file' ? { kind: 'file', path: b.path }
+      const now = await takeSnapshot(t, b.kind === 'file' || b.kind === 'dir' ? { kind: b.kind, path: b.path }
         : b.kind === 'service' ? { kind: 'service', name: b.name } : { kind: 'android_setting', ns: b.ns, key: b.key });
       if (!same(b, now)) last += `${b.kind} ${'path' in b ? b.path : 'name' in b ? b.name : b.key} differs; `;
     }

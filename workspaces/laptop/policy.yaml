@@ -1,0 +1,42 @@
+# Policy for the laptop SANDBOX (container laptop-sandbox, only ~/nightshift-playground mounted at /playground,
+# known-good snapshot at /snapshot, no network, no sudo). Commands run inside the container. Not the host.
+deviceType: laptop
+
+forbidden:
+  - '\brm\s+(-\S+\s+)*-\S*[rR]'
+  - '\b(sudo|su|doas)\b'
+  - '\b(curl|wget|nc|ncat|ssh|scp|ftp|telnet)\b'
+  - '\.\./'
+  - '\b(mkfs|dd|shutdown|reboot|poweroff|halt)\b'
+  - '(^|\s)/(etc|proc|sys|dev|root|home|usr|bin|sbin|var|boot)\b'
+  - '(^|\s)~'
+  - '\bchmod\s+(-\S+\s+)*[0-7]*777\b'
+
+read:
+  - '^ls(\s+-\S+)*(\s+/(playground|snapshot)\S*)?$'
+  - '^(cat|head|tail|wc|stat|file)\s+(-\S+\s+)*/(playground|snapshot)/\S+$'
+  - '^find\s+/(playground|snapshot)(\s+-(maxdepth|type|name)\s+\S+)*$'
+  - '^du(\s+-\S+)*\s+/(playground|snapshot)\S*$'
+  - '^(whoami|date|id|uname)(\s+-\S+)*$'
+
+# Restore only what is missing, never overwrite edits. The executor snapshots the folder first and, if the
+# health check fails, moves anything it added aside to <path>.undone.<ts> (never deletes).
+autonomous:
+  - id: restore-folder
+    match: '^(restore-folder|restore folder|cp -a -n /snapshot/files/\. /playground/)$'
+    capability: shell.write
+    command: 'cp -a -n /snapshot/files/. /playground/'
+    snapshots:
+      - { kind: dir, path: /playground/projects/notes }
+    inverse: ''
+    health: 'cd /playground && sha256sum -c --quiet /snapshot/MANIFEST && for d in $(cat /snapshot/DIRS); do [ -d "$d" ] || exit 1; done'
+    risk: low
+    timeoutS: 30
+
+write:
+  - '^(cp|mv|mkdir|touch)\s+(-\S+\s+)*/playground/\S+(\s+/playground/\S+)?$'
+
+destructive:
+  - '\brm\b'
+  - '\b(truncate|shred|unlink)\b'
+  - '\b(chown|chmod)\s+-R\b'

@@ -10,3 +10,19 @@ services:
     container_name: web-2
     restart: unless-stopped
     ports: ["127.0.0.1:18082:8080"]
+  # SANDBOX stand-in for "the laptop": only ~/nightshift-playground is mounted (rw), the known-good snapshot is read-only,
+  # no network, read-only root fs, no capabilities, no sudo. Run demo/laptop-setup.sh first.
+  laptop:
+    image: python:3.12-slim
+    container_name: laptop-sandbox
+    command: sleep infinity
+    user: "${LAPTOP_UID:-1000}:${LAPTOP_GID:-1000}"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    working_dir: /playground
+    restart: unless-stopped
+    volumes:
+      - "${HOME}/nightshift-playground:/playground"
+      - "${HOME}/.nightshift/playground-snapshot:/snapshot:ro"

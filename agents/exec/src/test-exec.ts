@@ -25,7 +25,7 @@ const online = (id: string) => gate.db.device.id.find(id)?.status === 'online';
 let child: ChildProcess | undefined;
 if (!['web-1', 'web-2', 'pixel'].every(online)) {
   console.log('starting executors...');
-  child = spawn('npx', ['tsx', 'src/index.ts'], { cwd: path.resolve(import.meta.dirname, '..'), stdio: ['ignore', 'inherit', 'inherit'] });
+  child = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], { cwd: path.resolve(import.meta.dirname, '..'), stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, NIGHTSHIFT_MONITOR: '0' } });
   for (let i = 0; i < 40 && !['web-1', 'web-2', 'pixel'].every(online); i++) await sleep(500);
 }
 check('devices web-1, web-2, pixel online', ['web-1', 'web-2', 'pixel'].every(online));

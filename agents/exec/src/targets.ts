@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { capture, clip, shq } from './util.js';
 
 export interface RunResult { code: number; output: string; timedOut: boolean }
@@ -16,18 +19,17 @@ const merge = (stdout: string, stderr: string) => clip(stderr ? `${stdout}${stdo
 
 /** docker exec into a container whose name is the device id. */
 export class DockerTarget implements Target {
-  readonly kind = 'docker';
   readonly flavor = 'linux' as const;
-  constructor(readonly id: string, readonly name = `${id} (container stand-in)`) {}
+  constructor(readonly id: string, readonly name = `${id} (container stand-in)`, readonly container = id, readonly kind = 'docker') {}
 
   async available() {
-    const r = await capture('docker', ['inspect', '-f', '{{.State.Running}}', this.id], 8000);
-    return r.code === 0 && r.stdout.trim() === 'true' ? null : `container ${this.id} not running`;
+    const r = await capture('docker', ['inspect', '-f', '{{.State.Running}}', this.container], 8000);
+    return r.code === 0 && r.stdout.trim() === 'true' ? null : `container ${this.container} not running`;
   }
 
   async run(command: string, timeoutS: number): Promise<RunResult> {
     // `timeout` inside the container kills the real process; the Node timer only kills the docker client.
-    const r = await capture('docker', ['exec', this.id, 'timeout', '-s', 'KILL', String(timeoutS), 'sh', '-c', command], (timeoutS + 5) * 1000);
+    const r = await capture('docker', ['exec', this.container, 'timeout', '-s', 'KILL', String(timeoutS), 'sh', '-c', command], (timeoutS + 5) * 1000);
     const timedOut = r.timedOut || r.code === 137 || r.code === 124;
     return { code: r.code, output: merge(r.stdout, r.stderr) + (timedOut ? `\n[timeout after ${timeoutS}s]` : ''), timedOut };
   }
@@ -56,5 +58,28 @@ export class AdbTarget implements Target {
     if (code === 0 && /^(settings|svc|cmd|pm|am)\b/.test(command.trim()) &&
         /(^|\n)\s*(Exception|java\.\w+\.|Error:|error:|Permission denied|SecurityException)/.test(out)) code = 1;
     return { code, output: out + (timedOut ? `\n[timeout after ${timeoutS}s]` : ''), timedOut };
+  }
+}
+
+/**
+ * The executor runs ON this machine (a VPS, say) as a limited user. Commands run via `sh -c` with cwd = root,
+ * so runbooks use paths relative to the root. No sudo: callers should also run the process with NoNewPrivileges.
+ * Service control goes through the narrow `svc` wrapper found on PATH (~/.local/bin), not through raw systemctl.
+ */
+export class HostTarget implements Target {
+  readonly flavor = 'linux' as const;
+  readonly kind = 'host';
+  readonly root: string;
+  constructor(readonly id: string, root: string, readonly name = `${id} (host, root ${root})`) {
+    this.root = root.replace(/^~(?=$|\/)/, os.homedir());
+  }
+
+  async available() { return fs.existsSync(this.root) ? null : `root ${this.root} does not exist`; }
+
+  async run(command: string, timeoutS: number): Promise<RunResult> {
+    const env = { ...process.env, NS_ROOT: this.root, PATH: `${path.join(os.homedir(), '.local', 'bin')}:${process.env.PATH ?? ''}` };
+    const r = await capture('timeout', ['-s', 'KILL', String(timeoutS), 'sh', '-c', command], (timeoutS + 5) * 1000, { cwd: this.root, env });
+    const timedOut = r.timedOut || r.code === 137 || r.code === 124;
+    return { code: r.code, output: merge(r.stdout, r.stderr) + (timedOut ? `\n[timeout after ${timeoutS}s]` : ''), timedOut };
   }
 }
