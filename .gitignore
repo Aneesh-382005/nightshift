@@ -1,0 +1,12 @@
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.*
+dist/
+.spacetime/
+*.log
+demo/*.mp4
+.stdb-token
+*.bak

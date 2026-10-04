@@ -1,0 +1,12 @@
+{
+  "name": "nightshift",
+  "version": "0.1.0",
+  "private": true,
+  "description": "An AI agent that fixes what breaks while you sleep, on a leash you can feel.",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "check": "./scripts/check-env.sh",
+    "dev": "./scripts/dev.sh"
+  }
+}
