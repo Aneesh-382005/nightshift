@@ -1,5 +1,11 @@
 # Devpost draft (lead-owned). Only claim what is VERIFIED in docs/TRACKER.md.
 
+## Paste-ready fields
+Project name: Nightshift
+Elevator pitch (182 chars): Earned autonomy for machines: a trust layer that lets AI heal servers and phones while you sleep, asks before risky fixes, undoes any change, and answers to a wristband you can feel.
+Thumbnail: docs/img/thumbnail.png (3:2). Gallery: docs/img/architecture.png, dashboard screenshots (dark and light), FREE-WILi photos (IDLE, APPROVE, HEALTHY), Notability screenshots.
+Positioning: not "an AI agent". Everyone is building agents that do things; Nightshift is the layer that decides when they are allowed to: policy gate, earned trust, undo, a physical approval device, one gesture to kill.
+
 ## Name and tagline
 Nightshift. Sleep. Nightshift's on.
 An AI agent that fixes what breaks while you sleep, with a Lantern (FREE-WILi) that glows when it needs you.
