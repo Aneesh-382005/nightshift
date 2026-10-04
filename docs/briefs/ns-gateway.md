@@ -1,0 +1,11 @@
+# Brief: ns-gateway. You own hub/ and workspaces/.
+Read CLAUDE.md, docs/STATE.md, docs/CONTRACT.md (v3.2), docs/ref/mcp.md, docs/ref/harnesses.md, docs/ref/models.md.
+Build, in this order:
+1. hub/ TypeScript package (Node 22, tsx, `@modelcontextprotocol/sdk` v1, zod, yaml, spacetimedb). Import bindings from ../agents/common/src/module_bindings. Connect as the gate: claimGate('tally-gate-dev'), persist token in hub/.stdb-token. Heartbeat not needed.
+2. workspaces/linux-server/{SKILL.md,policy.yaml} and workspaces/android/{SKILL.md,policy.yaml}. policy.yaml has: forbidden patterns, read patterns, autonomous fixes (id, match, capability shell.write, command, snapshots, inverse, health, runbookId), write patterns, destructive patterns. Day-one autonomous fixes: restart web service + health, rotate logs (never delete), restore known-good config, android wifi toggle.
+3. Policy engine: classify(command, deviceType) -> forbidden | autonomous | read | write | destructive. Never trust the agent's own classification.
+4. MCP stdio server with tools run_command(device, command, reason), get_result(grantId), list_devices(). run_command: classify; forbidden -> requestGrant then gateDeny (so the event log shows it); read -> autoApprove; autonomous -> autoApprove only if runbook_trust.level is 1 else leave pending for the Lantern; write/destructive -> pending. Wait up to 45s for run_result then return {status:'done'|'pending'|'denied', grantId, exitCode, output} (pending means call get_result later). After a result call recordFixResult (threshold 3) and update incident status; apply the circuit breaker.
+5. hub/src/cli.ts to exercise run_command without an LLM. Test against the docker executor from ns-exec.
+6. Request watcher: user_request status new -> spawn the harness headless (gemini -p, claude -p or codex exec per docs/ref) with this MCP server, setting cwd to a workspace, status running/done, and logEvent cost.update with tokens/usd/seconds/commands.
+7. Mock alert webhook on :8787 (see CONTRACT): openIncident and submitRequest.
+Acceptance: cli run on web-1 of an autonomous fix goes pending, press (or decideGrant by CLI warden) then done with healthOk; after 3 successes the same fix runs alone; a forbidden command is denied with an event and no executor activity.

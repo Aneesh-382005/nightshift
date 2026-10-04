@@ -1,0 +1,60 @@
+# Policy for android devices (Pixel 9 Pro over adb). Commands are the device-side shell text
+# (what follows `adb shell`). Classification order is the same as for linux-server.
+deviceType: android
+
+forbidden:
+  - '\brm\s+(-\S+\s+)*-\S*[rR]'
+  - '\bpm\s+(uninstall|clear|disable)'
+  - '\bcmd\s+package\s+(uninstall|clear)'
+  - '\bwipe\b|\bfactory[_ -]?reset|\bMASTER_CLEAR\b'
+  - '\breboot\b|\bsvc\s+power\s+(reboot|shutdown)'
+  - '\bsettings\s+put\s+secure\s+(install_non_market_apps|accessibility_enabled|enabled_accessibility_services|lockscreen)'
+  - '\bsettings\s+put\s+global\s+(adb_enabled|development_settings_enabled)'
+  - '\bsetprop\b'
+  - '\b(su|sh\s+-c\s+.*su)\b'
+  - '\bcontent\s+(delete|insert|update)\b'
+  - '\binput\s+(text|keyevent)\b.*(password|pin)'
+
+read:
+  - '^settings\s+get\s+(global|system|secure)\s+[a-z_0-9]+$'
+  - '^settings\s+list\s+(global|system)$'
+  - '^dumpsys\s+(wifi|connectivity|battery|diskstats|netstats)$'
+  - '^cmd\s+wifi\s+status$'
+  - '^ping\s+(-\S+\s+\S+\s+)*-c\s*\d\s+(-W\s*\d\s+)?[0-9.]+$'
+  - '^ping\s+-c\s*\d\s+(-W\s*\d\s+)?[0-9.]+$'
+  - '^logcat\s+-d(\s+-t\s+\d+)?$'
+  - '^(getprop|df|uptime|date|id|whoami)(\s+-\S+)*(\s+\S+)?$'
+
+autonomous:
+  - id: wifi-enable
+    match: '^(svc wifi enable|wifi-enable|enable wifi|turn on wifi)$'
+    capability: shell.write
+    command: 'svc wifi enable; sleep 4; true'
+    snapshots:
+      - { kind: android_setting, ns: global, key: wifi_on }
+    inverse: 'svc wifi disable; true'
+    health: '[ "$(settings get global wifi_on)" = "1" ]'
+    risk: low
+    timeoutS: 20
+  - id: wifi-bounce
+    match: '^(wifi-bounce|bounce wifi|toggle wifi)$'
+    capability: shell.write
+    command: 'svc wifi disable; sleep 2; svc wifi enable; sleep 5; true'
+    snapshots:
+      - { kind: android_setting, ns: global, key: wifi_on }
+    inverse: 'svc wifi enable; true'
+    health: '[ "$(settings get global wifi_on)" = "1" ] && ping -c 1 -W 3 8.8.8.8 >/dev/null'
+    risk: low
+    timeoutS: 30
+
+write:
+  - '^svc\s+(wifi|data|bluetooth)\s+(enable|disable)$'
+  - '^settings\s+put\s+(global|system)\s+(airplane_mode_on|wifi_on|screen_brightness|screen_off_timeout|stay_on_while_plugged_in)\s+\S+$'
+  - '^settings\s+delete\s+(global|system)\s+[a-z_0-9]+$'
+  - '^am\s+force-stop\s+[a-z0-9_.]+$'
+
+destructive:
+  - '\bpm\b'
+  - '\brm\b'
+  - '\bsettings\s+put\b'
+  - '\bam\s+(start|broadcast|kill)'

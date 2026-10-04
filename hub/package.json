@@ -1,0 +1,20 @@
+{
+  "name": "@nightshift/hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Nightshift gateway: policy engine, MCP server, request watcher, mock alert webhook",
+  "scripts": {
+    "mcp": "tsx src/mcp.ts",
+    "cli": "tsx src/cli.ts",
+    "serve": "tsx src/serve.ts",
+    "test": "tsx src/test-policy.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.0",
+    "spacetimedb": "2.10.*",
+    "yaml": "^2.6.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": { "tsx": "^4.19.0", "typescript": "~5.6.2", "@types/node": "^22.0.0" }
+}

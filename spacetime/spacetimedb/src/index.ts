@@ -40,6 +40,7 @@ const accessGrant = table({ name: 'access_grant', public: true }, {
   capability: t.string(),
   reason: t.string(),
   command: t.string(),
+  plan: t.string(),                // JSON from the gate: snapshot steps, inverse, health check, timeout
   status: t.string(),              // pending | active | denied | expired | revoked | used
   singleUse: t.bool(),
   ttlSeconds: t.u32(),
@@ -87,6 +88,26 @@ const runbookTrust = table({ name: 'runbook_trust', public: true }, {
   updatedAtUs: t.u64(),
 });
 
+// One row per executed grant. Executors run each active grant's command exactly once and write this.
+const runResult = table({ name: 'run_result', public: true }, {
+  grantId: t.u64().primaryKey(),
+  device: t.string(),
+  exitCode: t.i32(),
+  output: t.string(),              // truncated stdout+stderr
+  healthOk: t.bool(),
+  rolledBack: t.bool(),
+  tsUs: t.u64(),
+});
+
+// Requests typed by a human (dashboard or phone). The hub picks them up and launches the harness.
+const userRequest = table({ name: 'user_request', public: true }, {
+  id: t.u64().primaryKey().autoInc(),
+  text: t.string(),
+  status: t.string(),              // new | running | done | failed
+  result: t.string(),
+  tsUs: t.u64(),
+});
+
 const expireTick = table({ name: 'expire_tick' }, {
   scheduledId: t.u64().primaryKey().autoInc(),
   scheduledAt: t.scheduleAt(),
@@ -97,7 +118,7 @@ const reapTick = table({ name: 'reap_tick' }, {
 });
 
 const spacetimedb = schema({
-  warden, gate, device, trust, accessGrant, event, change, incident, runbookTrust, expireTick, reapTick,
+  warden, gate, device, trust, accessGrant, event, change, incident, runbookTrust, runResult, userRequest, expireTick, reapTick,
 });
 export default spacetimedb;
 
@@ -182,7 +203,7 @@ export const addTrust = spacetimedb.reducer(
 export const requestGrant = spacetimedb.reducer(
   {
     requester: t.string(), target: t.string(), capability: t.string(), reason: t.string(),
-    command: t.string(), ttlSeconds: t.u32(), autoApprove: t.bool(),
+    command: t.string(), plan: t.string(), ttlSeconds: t.u32(), autoApprove: t.bool(),
   },
   (ctx, a) => {
     needGate(ctx);
@@ -198,7 +219,7 @@ export const requestGrant = spacetimedb.reducer(
     const auto = (a.autoApprove && AUTO_OK.includes(a.capability)) || trusted;
     const row = ctx.db.accessGrant.insert({
       id: 0n, requester: a.requester, target: a.target, capability: a.capability, reason: a.reason,
-      command: a.command, status: auto ? 'active' : 'pending',
+      command: a.command, plan: a.plan, status: auto ? 'active' : 'pending',
       singleUse: a.capability !== 'shell.read', ttlSeconds: a.ttlSeconds,
       createdAtUs: now, expiresAtUs: auto ? now + BigInt(a.ttlSeconds) * 1_000_000n : 0n,
       decidedBy: auto ? (trusted ? 'trust' : 'gate') : '',
@@ -285,7 +306,7 @@ export const recordChange = spacetimedb.reducer(
 );
 
 export const markChange = spacetimedb.reducer({ changeId: t.u64(), status: t.string() }, (ctx, { changeId, status }) => {
-  if (!isGate(ctx) && !isWarden(ctx)) throw new SenderError('not allowed');
+  if (!isGate(ctx) && !isWarden(ctx) && !isDevice(ctx)) throw new SenderError('not allowed');
   const c = ctx.db.change.id.find(changeId);
   if (!c) throw new SenderError('no such change');
   ctx.db.change.id.update({ ...c, status });
@@ -329,6 +350,44 @@ export const recordFixResult = spacetimedb.reducer(
       log(ctx, 'trust.promoted', a.deviceType, 0n, a.runbookId);
     }
     ctx.db.runbookTrust.runbookId.update({ ...r, successes, failures, level, updatedAtUs: now });
+  }
+);
+
+// Executor (target device) or gate records the outcome of a grant's command.
+export const recordResult = spacetimedb.reducer(
+  { grantId: t.u64(), device: t.string(), exitCode: t.i32(), output: t.string(), healthOk: t.bool(), rolledBack: t.bool() },
+  (ctx, a) => {
+    if (!isGate(ctx) && !isDevice(ctx)) throw new SenderError('not allowed');
+    const row = { grantId: a.grantId, device: a.device, exitCode: a.exitCode, output: a.output.slice(0, 4000), healthOk: a.healthOk, rolledBack: a.rolledBack, tsUs: nowUs(ctx) };
+    if (ctx.db.runResult.grantId.find(a.grantId)) ctx.db.runResult.grantId.update(row);
+    else ctx.db.runResult.insert(row);
+    log(ctx, a.healthOk ? 'health.passed' : 'health.failed', a.device, a.grantId, `exit ${a.exitCode}`);
+  }
+);
+
+// Warden only (the undo button). The target's executor sees the event and runs the inverse command.
+export const requestRollback = spacetimedb.reducer({ changeId: t.u64() }, (ctx, { changeId }) => {
+  needWarden(ctx);
+  const c = ctx.db.change.id.find(changeId);
+  if (!c) throw new SenderError('no such change');
+  if (c.status !== 'applied') throw new SenderError('change is not reversible or already rolled back');
+  log(ctx, 'rollback.requested', c.device, c.grantId, String(changeId));
+});
+
+// Anyone may type a request. The gate (hub) updates its status.
+export const submitRequest = spacetimedb.reducer({ text: t.string() }, (ctx, { text }) => {
+  if (text.trim().length === 0 || text.length > 2000) throw new SenderError('bad request text');
+  const row = ctx.db.userRequest.insert({ id: 0n, text, status: 'new', result: '', tsUs: nowUs(ctx) });
+  log(ctx, 'request.submitted', 'user', 0n, `#${row.id} ${text.slice(0, 80)}`);
+});
+
+export const updateRequest = spacetimedb.reducer(
+  { id: t.u64(), status: t.string(), result: t.string() },
+  (ctx, a) => {
+    needGate(ctx);
+    const r = ctx.db.userRequest.id.find(a.id);
+    if (!r) throw new SenderError('no such request');
+    ctx.db.userRequest.id.update({ ...r, status: a.status, result: a.result.slice(0, 4000) });
   }
 );
 

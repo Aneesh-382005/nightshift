@@ -65,3 +65,20 @@ New table `incident`: id, device, alert, runbook_id, status (open, healed, rolle
 Circuit breaker: 2 failed fixes on a device, or more than 6 autonomous actions per hour per device, sets incident status escalated and stops.
 Event kinds add fix.autonomous, health.passed, health.failed, trust.promoted, incident.escalated.
 Warden: autonomous fix = brief amber flash and a tick, then green. Escalation = amber pulse and chime. Policy block = red and low tone.
+
+## v3.2 implemented surface (authoritative, matches the published module)
+Tables (all public except warden, gate, expire_tick, reap_tick): device, trust, access_grant(+plan), event, change, incident, runbook_trust, run_result, user_request.
+New: run_result(grantId pk, device, exitCode, output, healthOk, rolledBack, tsUs), user_request(id, text, status new|running|done|failed, result, tsUs).
+Reducers added: recordResult (gate or device), requestRollback (warden only; logs event rollback.requested with detail = changeId, device = target), submitRequest (anyone), updateRequest (gate only). markChange now allows device identities. requestGrant args: requester, target, capability, reason, command, plan, ttlSeconds, autoApprove.
+Execution rule: an executor runs each ACTIVE grant targeting its own device exactly once (dedupe by run_result existence), calls consumeGrant first, then records run_result. One grant per command.
+plan JSON (written by the gate, read by the executor):
+{"snapshots":[{"kind":"file","path":"/etc/app.conf"},{"kind":"service","name":"web"},{"kind":"android_setting","ns":"global","key":"wifi_on"}],"inverse":"<command that undoes it>","health":"<command, exit 0 means healthy>","timeoutS":30,"runbookId":"restart-web","deviceType":"linux-server"}
+Auto-rollback: if health fails the executor runs inverse itself and records run_result with rolledBack true and markChange rolled_back.
+Undo button: warden calls requestRollback(changeId); the target's executor watches event rollback.requested for its device, runs change.inverseCommand, markChange rolled_back.
+Cost event: logEvent kind cost.update, detail = JSON {"tokens":int,"usd":number,"seconds":number,"commands":int,"presses":int,"model":string}.
+Warden bridge protocol (JSON lines over stdio between agents/warden Node and agents/freewili/bridge.py):
+ to bridge: {"op":"text","text":"..."} {"op":"led","r":0-255,"g":0,"b":0,"mode":"solid|pulse|blink","leds":[0..6]|"all"} {"op":"tone","hz":880,"ms":200,"amp":0.3} {"op":"clear"}
+ from bridge: {"event":"button","name":"gray|yellow|green|blue|red"} {"event":"ready"} {"event":"error","message":"..."}
+Button map: green approve 120s, blue approve 30s, red deny pending or revoke all, gray undo last applied change, yellow show last 5 audit lines. Shake revokes all (stretch). Bridge needs a --sim mode (keys g b r w y) because FREE-WILi connect() is being debugged by the lead.
+Gateway ports: mock alert webhook POST http://127.0.0.1:8787/alert {"device":"web-1","alert":"service down"}.
+Device ids: docker targets `web-1`, `web-2`; phone `pixel`; the gate and warden are not devices.

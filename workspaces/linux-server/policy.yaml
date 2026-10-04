@@ -1,0 +1,85 @@
+# Policy for linux-server devices (docker containers web-1, web-2 stand in for servers).
+# The gate classifies every command from this file. The agent never classifies its own commands.
+# Order: forbidden > autonomous (exact match) > destructive > read (exact match) > write > default destructive.
+# Shell metacharacters (; & | ` $( > < newline) disqualify autonomous and read matches.
+deviceType: linux-server
+
+# Search anywhere in the command. A hit is denied by the gate, logged, never shown for approval.
+forbidden:
+  - 'rm\s+(-\S+\s+)*-\S*[rR]'
+  - 'rm\s+(-\S+\s+)*\S*/var/log'
+  - 'rm\s+(-\S+\s+)*/(\s|$|\*)'
+  - '\bmkfs'
+  - '\bdd\s+if='
+  - '>\s*/dev/(sd|nvme|vd)'
+  - '(curl|wget)\b.*\|\s*(sudo\s+)?(ba|z)?sh'
+  - 'chmod\s+(-\S+\s+)*[0-7]*777\s+/'
+  - '\b(shutdown|poweroff|halt|reboot)\b'
+  - ':\(\)\s*\{'
+  - '\b(passwd|userdel|useradd)\b'
+  - '/etc/(shadow|sudoers)'
+  - '\.\./'
+
+# Full match, no shell metacharacters. Runs automatically for trusted pairs.
+read:
+  - '^(cat|head|tail|less|wc|stat|file)\s+(-\S+\s+)*/(var/log|etc/app|srv|tmp)\S*(\s+\S+)*$'
+  - '^tail\s+-n\s*\d+\s+/var/log/\S+$'
+  - '^ls(\s+-\S+)*(\s+/(var/log|etc/app|srv|tmp)\S*)?$'
+  - '^df(\s+-\S+)*(\s+\S+)?$'
+  - '^du(\s+-\S+)*\s+/(var/log|srv|tmp)\S*$'
+  - '^(ps|uptime|free|whoami|hostname|date|id)(\s+[a-zA-Z-]+)*$'
+  - '^pgrep\s+(-\S+\s+)*\S+$'
+  - '^(health|svc status web)$'
+  - '^grep\s+(-\S+\s+)*\S+\s+/(var/log|etc/app)\S*$'
+
+# Allowlisted fixes. `match` is a regex on the agent's command (full match). The gate runs the policy
+# `command`, never the agent's text. They start at level 2 (ask). 3 verified successes promote to level 1 (alone).
+# Commands match the demo image (demo/docker): `svc`, `health`, `rotate-logs` helpers, app on :8080,
+# logs in /var/log/app, config /etc/app.conf with a known-good copy at /srv/app.conf.good.
+# An empty `inverse` means the executor builds the undo from the snapshots.
+autonomous:
+  - id: restart-web
+    match: '^(svc restart web|systemctl restart (web|app|nginx)|service (web|app|nginx) restart|restart-web|restart web( service)?)$'
+    capability: shell.write
+    command: 'svc restart web'
+    snapshots:
+      - { kind: service, name: web }
+    inverse: ''
+    health: 'health'
+    risk: low
+    timeoutS: 30
+  - id: rotate-logs
+    match: '^(rotate-logs|rotate logs|logrotate( -f)? /etc/logrotate\.d/app)$'
+    capability: shell.write
+    command: 'rotate-logs'
+    snapshots: []
+    inverse: 'rotate-logs undo'
+    health: 'health'
+    risk: low
+    timeoutS: 30
+  - id: restore-config
+    match: '^(restore-config|restore config|cp /srv/app\.conf\.good /etc/app\.conf)$'
+    capability: shell.write
+    command: 'cp /srv/app.conf.good /etc/app.conf && svc restart web'
+    snapshots:
+      - { kind: file, path: /etc/app.conf }
+    inverse: ''
+    health: 'health'
+    risk: low
+    timeoutS: 30
+
+# Needs a physical press. Reversible changes only where an inverse is stated by an autonomous fix.
+write:
+  - '^(systemctl|service)\s+(restart|start|stop)\s+\S+$'
+  - '^(cp|mv|mkdir|touch|tee|sed -i)\s'
+  - '^(kill|pkill)\s'
+  - '^chmod\s+[0-7]{3,4}\s+(/etc/app\.conf|/var/log/app/\S+|/tmp/\S+)$'
+
+# Press and hold. Not reversible, one command only. Also the default for anything unclassified.
+destructive:
+  - '\brm\b'
+  - '\b(truncate|shred|unlink)\b'
+  - '\b(apt|apt-get|dpkg|pip|pip3|npm)\s+(remove|purge|uninstall|install)\b'
+  - '\bkill\s+-9\s+(1|-1)\b'
+  - '\b(iptables|nft|ufw)\b'
+  - '\b(chown|chmod)\s+-R\b'

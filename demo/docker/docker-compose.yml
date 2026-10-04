@@ -1,0 +1,12 @@
+# Stand-in servers for the demo (containers, labelled as such). docker compose -f demo/docker/docker-compose.yml up -d --build
+services:
+  web-1:
+    build: .
+    container_name: web-1
+    restart: unless-stopped
+    ports: ["127.0.0.1:18081:8080"]
+  web-2:
+    build: .
+    container_name: web-2
+    restart: unless-stopped
+    ports: ["127.0.0.1:18082:8080"]

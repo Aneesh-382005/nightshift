@@ -2,7 +2,7 @@
   "name": "nightshift",
   "version": "0.1.0",
   "private": true,
-  "description": "An AI agent that fixes what breaks while you sleep, on a leash you can feel.",
+  "description": "An AI agent that fixes what breaks while you sleep, with a Lantern that glows when it needs you.",
   "license": "MIT",
   "engines": { "node": ">=22" },
   "scripts": {

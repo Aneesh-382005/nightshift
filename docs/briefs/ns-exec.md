@@ -1,0 +1,9 @@
+# Brief: ns-exec. You own agents/exec/ and demo/.
+Read CLAUDE.md, docs/STATE.md, docs/CONTRACT.md (v3.2), docs/ref/targets.md, docs/ref/spacetimedb.md.
+Build, in this order:
+1. agents/exec TypeScript package. Generic executor loop: register_device(id, name, kind, capabilities), heartbeat every 2s, subscribe to access_grant where target == my id and status active, run each grant exactly once (dedupe by run_result), consumeGrant first. Follow the plan JSON in CONTRACT: snapshot, run with timeout (Node timer plus `timeout N` on the target), run health, recordChange (preState JSON + inverse), recordResult, auto-rollback via inverse if health fails (recordResult rolledBack true, markChange rolled_back). Watch event rollback.requested for my device and run the change's inverse.
+2. Docker target: `docker exec` into containers web-1 and web-2 (id = container name). demo/docker with a Dockerfile/compose: a tiny Python HTTP service with /health supervised by a restart loop, a log folder, a config file with a known-good copy. scripts for demo/break.sh (kill service, fill logs, corrupt config) and demo/reset.sh.
+3. Android target: id `pixel`, `adb -s 54241FDAP002UZ shell ...`, detect failure by exit code and output text (settings/svc can print exceptions with exit 0). `settings get` returning `null` means absent, undo with `settings delete`. Health: connectivity check.
+4. A test script that, using a gate connection, requests grants and checks run_result for each target.
+Do not edit spacetime/. Keep commands short-lived and never run anything on the host except through docker exec or adb.
+Acceptance: restart-web on web-1 completes with healthOk; a broken config is restored and healthOk; forced health failure triggers auto-rollback; rollback.requested undoes the last change; the phone wifi toggle round-trips.

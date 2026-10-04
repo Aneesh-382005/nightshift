@@ -1,0 +1,6 @@
+#!/bin/sh
+# Rotate (never delete) the log folder. "rotate-logs undo" moves the last rotation back.
+case "$1" in
+  undo) d=$(cat /run/rotate.last) && mv "$d"/* /var/log/app/ ;;
+  *) d=/var/log/app.rotated.$(date +%s); mv /var/log/app "$d" && mkdir /var/log/app && echo "$d" > /run/rotate.last ;;
+esac

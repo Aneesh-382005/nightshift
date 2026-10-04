@@ -1,0 +1,12 @@
+#!/bin/sh
+# usage: svc <start|stop|restart|status> web
+alive() { [ -s /run/app.pid ] && [ -d "/proc/$(cat /run/app.pid)" ]; }
+killapp() { alive && kill "$(cat /run/app.pid)"; true; }
+waitfor() { i=0; while [ $i -lt 50 ]; do if [ "$1" = up ]; then alive && /usr/local/bin/health && return 0; else alive || return 0; fi; sleep 0.1; i=$((i+1)); done; return 1; }
+case "$1" in
+  start)   rm -f /run/web.down; alive || waitfor up ;;
+  stop)    touch /run/web.down; killapp; waitfor down ;;
+  restart) rm -f /run/web.down; killapp; sleep 0.3; waitfor up ;;
+  status)  if alive; then echo running; else echo stopped; exit 3; fi ;;
+  *) echo "usage: svc start|stop|restart|status web" >&2; exit 2 ;;
+esac

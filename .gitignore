@@ -8,5 +8,7 @@ dist/
 .spacetime/
 *.log
 demo/*.mp4
-.stdb-token
+.stdb-token*
 *.bak
+err.txt
+*.out

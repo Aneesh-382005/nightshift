@@ -1,0 +1,13 @@
+{
+  "name": "@nightshift/warden",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Warden: turns FREE-WILi button presses into SpacetimeDB approvals",
+  "scripts": {
+    "start": "tsx src/warden.ts",
+    "sim": "tsx src/warden.ts --backend sim",
+    "demo": "tsx src/demo-grant.ts"
+  },
+  "devDependencies": { "tsx": "^4.19.0", "typescript": "~5.6.2", "@types/node": "^22.0.0" }
+}
